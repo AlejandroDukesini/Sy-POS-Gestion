@@ -1,0 +1,41 @@
+{
+  "name": "pospy-web",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Interfaz React de POS-PY (web, PWA y ventana de escritorio Tauri). La lógica de negocio vive en la API Python.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "e2e": "node e2e/smoke.mjs"
+  },
+  "dependencies": {
+    "lucide-react": "0.460.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-router-dom": "7.9.4"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.38.0",
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "16.3.0",
+    "@testing-library/user-event": "14.6.1",
+    "@types/react": "18.3.26",
+    "@types/react-dom": "18.3.7",
+    "@vitejs/plugin-react": "4.7.0",
+    "eslint": "9.38.0",
+    "eslint-plugin-react-hooks": "5.2.0",
+    "globals": "16.4.0",
+    "jsdom": "26.1.0",
+    "playwright-core": "^1.49.1",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.46.2",
+    "vite": "6.3.5",
+    "vite-plugin-pwa": "1.0.3",
+    "vitest": "3.2.4"
+  }
+}

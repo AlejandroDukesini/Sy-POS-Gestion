@@ -1,0 +1,102 @@
+/* Tokens de diseño. Cada par texto/fondo cumple WCAG 2.1 AA (lo verifica src/test/contrast.test.ts). */
+:root {
+  color-scheme: light;
+  --font: Arial, "Helvetica Neue", Helvetica, "Segoe UI", sans-serif;
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --control-h: 48px;
+  --control-h-sm: 40px;
+  --gap: 16px;
+  --sidebar-w: 248px;
+  --topbar-h: 64px;
+  --panel-w: 400px;
+  --dur: 160ms;
+  --dur-slow: 240ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+
+  --bg: #f4f6fa;
+  --surface: #ffffff;
+  --surface-2: #eef1f6;
+  --surface-hover: #e6eaf2;
+  --border: #c9d0dc;
+  --border-strong: #8a94a6;
+  --text: #111827;
+  --text-muted: #4b5563;
+  --primary: #1d4ed8;
+  --primary-hover: #1e40af;
+  --on-primary: #ffffff;
+  --primary-soft: #dbe6ff;
+  --on-primary-soft: #1e3a8a;
+  --danger: #b91c1c;
+  --danger-hover: #991b1b;
+  --on-danger: #ffffff;
+  --danger-soft: #fde8e8;
+  --on-danger-soft: #7f1d1d;
+  --success-soft: #dcf5e4;
+  --on-success-soft: #14532d;
+  --warning-soft: #fdf1d3;
+  --on-warning-soft: #713f12;
+  --info-soft: #e0ecff;
+  --on-info-soft: #1e3a8a;
+  --focus: #1d4ed8;
+  --shadow: 0 1px 2px rgb(15 23 42 / 0.06), 0 4px 12px rgb(15 23 42 / 0.06);
+  --shadow-lg: 0 10px 30px rgb(15 23 42 / 0.16);
+  --overlay: rgb(15 23 42 / 0.45);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0f141c;
+  --surface: #171e29;
+  --surface-2: #1f2836;
+  --surface-hover: #273246;
+  --border: #364256;
+  --border-strong: #6b7a92;
+  --text: #f1f4f9;
+  --text-muted: #b6c0cf;
+  --primary: #8fb0ff;
+  --primary-hover: #b3c9ff;
+  --on-primary: #0b1530;
+  --primary-soft: #1f3366;
+  --on-primary-soft: #dbe6ff;
+  --danger: #ff9b9b;
+  --danger-hover: #ffc0c0;
+  --on-danger: #3b0a0a;
+  --danger-soft: #4a1717;
+  --on-danger-soft: #ffd7d7;
+  --success-soft: #133b24;
+  --on-success-soft: #c8f2d6;
+  --warning-soft: #44330d;
+  --on-warning-soft: #fde7b0;
+  --info-soft: #1c2f58;
+  --on-info-soft: #dbe6ff;
+  --focus: #8fb0ff;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 4px 12px rgb(0 0 0 / 0.3);
+  --shadow-lg: 0 10px 30px rgb(0 0 0 / 0.5);
+  --overlay: rgb(0 0 0 / 0.6);
+}
+
+/* Alto contraste: bordes y textos secundarios más marcados en cualquier tema. */
+:root[data-contrast="high"] {
+  --border: var(--border-strong);
+  --text-muted: var(--text);
+}
+
+:root[data-density="compacta"] {
+  --gap: 12px;
+  --control-h: 44px;
+  --control-h-sm: 36px;
+}
+
+:root[data-motion="reduced"] {
+  --dur: 0ms;
+  --dur-slow: 0ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) {
+    --dur: 0ms;
+    --dur-slow: 0ms;
+  }
+}

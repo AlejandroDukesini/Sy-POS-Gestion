@@ -14,7 +14,8 @@ router = APIRouter(tags=["ventas"])
 
 @router.post("/sales/quote")
 def quote(body: Quote, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
-    result = app.sales.quote(current, body.data()["lines"])
+    data = body.data()
+    result = app.sales.quote(current, data["lines"], data.get("payments"))
     if not current.can("inventario.costos"):
         for ln in result["lines"]:
             ln.pop("unit_cost_cents", None)

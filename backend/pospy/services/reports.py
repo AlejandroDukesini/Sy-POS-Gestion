@@ -43,7 +43,7 @@ class ReportService:
         count = sum(d["sales"] for d in by_day)
         return {"date_from": start, "date_to": end, "by_day": by_day, "top_products": top, "by_user": by_user,
                 "total_cents": total, "sales": count, "average_ticket_cents": total // count if count else 0,
-                "returns": returns[0], "returns_cents": returns[1]}
+                "returns_count": returns[0], "returns_cents": returns[1]}
 
     def movements(self, actor: Actor, date_from: str | None = None, date_to: str | None = None) -> dict:
         actor.require("inventario.ver")

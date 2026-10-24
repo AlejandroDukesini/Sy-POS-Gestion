@@ -153,3 +153,10 @@ def test_fractional_quantity_rules(ctx, admin, cash_id):
     nail = ctx.inventory.create(admin, {"code": "CLAVO", "description": "Clavo", "price": "100", "initial_stock": "10"})
     with pytest.raises(ValidationError, match="enteras"):
         sell(ctx, admin, nail, "1.5", [{"method_id": cash_id, "amount": "150"}])
+
+
+def test_quote_payment_summary_for_interface(ctx, admin, product, cash_id):
+    q = ctx.sales.quote(admin, [{"product_id": product["id"], "qty": "2"}],
+                        [{"method_id": cash_id, "amount": "36000", "tendered": "50000"}])
+    s = q["payment_summary"]
+    assert s["complete"] and s["change_cents"] == 1400000 and s["remaining_cents"] == 0

@@ -114,8 +114,15 @@ class Item(Strict):
     discount_pct: Num | None = None
 
 
+class QuotePayment(Strict):
+    method_id: int | None = None
+    amount: Num | None = None
+    tendered: Num | None = None
+
+
 class Quote(Strict):
     lines: list[Item] = Field(max_length=500)
+    payments: list[QuotePayment] | None = None
 
 
 class SalePayment(Strict):

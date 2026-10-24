@@ -39,7 +39,7 @@ class SalesService:
         return self.settings.get("empresa")["timezone"]
 
     # ------------------------------------------------------------------ cotizar el carrito (sin guardar)
-    def quote(self, actor: Actor, items: list[dict]) -> dict:
+    def quote(self, actor: Actor, items: list[dict], payments: list[dict] | None = None) -> dict:
         if not (actor.can("ventas.vender") or actor.can("documentos.crear")):
             actor.require("ventas.vender")
         with self.db.read() as conn:
@@ -55,8 +55,26 @@ class SalesService:
                                  "message": f"{ln.code}: hay {from_milli(ln.stock_milli)} disponibles y se piden "
                                             f"{from_milli(needed[ln.product_id])}."})
         unique = {w["product_id"]: w for w in warnings}
-        return {**pricing.as_dict(lines, totals), "stock_warnings": list(unique.values()),
-                "can_sell": not unique or bool(allow_negative)}
+        result = {**pricing.as_dict(lines, totals), "stock_warnings": list(unique.values()),
+                  "can_sell": not unique or bool(allow_negative)}
+        if payments is not None:
+            result["payment_summary"] = self._payment_summary(payments, totals.total_cents)
+        return result
+
+    @staticmethod
+    def _payment_summary(payments: list[dict], total: int) -> dict:
+        """Vista previa de pagos para la interfaz (la validación definitiva ocurre al registrar la venta)."""
+        paid = change = 0
+        for p in payments:
+            amount = parse_decimal(p.get("amount"))
+            if amount is None or amount <= 0:
+                continue
+            paid += to_cents(amount)
+            tendered = parse_decimal(p.get("tendered"))
+            if tendered is not None and to_cents(tendered) > to_cents(amount):
+                change += to_cents(tendered) - to_cents(amount)
+        return {"paid_cents": paid, "remaining_cents": max(0, total - paid), "excess_cents": max(0, paid - total),
+                "change_cents": change, "complete": paid == total}
 
     # ------------------------------------------------------------------ venta
     def checkout(self, actor: Actor, data: dict, idempotency_key: str) -> dict:
