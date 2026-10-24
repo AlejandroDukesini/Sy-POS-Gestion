@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>POS-PY</title>
+<style>
+  body { margin: 0; font-family: Arial, sans-serif; display: grid; place-items: center; min-height: 100vh;
+         background: #f4f6fa; color: #111827; font-size: 18px; text-align: center; }
+  .spinner { width: 40px; height: 40px; margin: 0 auto 20px; border-radius: 50%; border: 5px solid #1d4ed8;
+             border-right-color: transparent; animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
+</style>
+</head>
+<body>
+  <main>
+    <div class="spinner" aria-hidden="true"></div>
+    <h1 style="font-size: 24px">Iniciando POS-PY…</h1>
+    <p>Preparando la base de datos local. Esto tarda unos segundos.</p>
+  </main>
+</body>
+</html>

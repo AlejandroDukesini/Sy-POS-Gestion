@@ -19,11 +19,39 @@ def setup_logging(logs_dir: Path) -> None:
                                                    encoding="utf-8")
     fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
     handler.setFormatter(fmt)
-    console = logging.StreamHandler(sys.stderr)
-    console.setFormatter(fmt)
     root = logging.getLogger()
     root.setLevel(logging.INFO)
-    root.handlers = [handler, console]
+    root.handlers = [handler]
+    if sys.stderr is not None:   # el ejecutable de escritorio (--noconsole) no tiene consola
+        console = logging.StreamHandler(sys.stderr)
+        console.setFormatter(fmt)
+        root.handlers.append(console)
+
+
+def watch_parent(pid: int) -> None:
+    """Cierra el servidor si la aplicación de escritorio que lo inició deja de existir."""
+    import threading
+
+    def wait_windows() -> None:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+        if not handle:
+            os._exit(0)
+        kernel32.WaitForSingleObject(handle, 0xFFFFFFFF)
+        logging.getLogger("pospy").info("La aplicación de escritorio terminó; se cierra el servidor.")
+        os._exit(0)
+
+    def wait_posix() -> None:
+        import time
+        while True:
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                os._exit(0)
+            time.sleep(2)
+
+    threading.Thread(target=wait_windows if sys.platform == "win32" else wait_posix, daemon=True).start()
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -33,6 +61,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--data-dir")
     parser.add_argument("--web-dist")
     parser.add_argument("--desktop", action="store_true", help="Modo escritorio (lo usa la aplicación Tauri)")
+    parser.add_argument("--parent-pid", type=int, help="Cerrar el servidor cuando termine este proceso")
     args = parser.parse_args(argv)
     for flag, env in ((args.host, "POS_HOST"), (args.port, "POS_PORT"), (args.data_dir, "POS_DATA_DIR"),
                       (args.web_dist, "POS_WEB_DIST")):
@@ -55,6 +84,8 @@ def main(argv: list[str] | None = None) -> None:
     if config.host not in ("127.0.0.1", "localhost", "::1") and not config.secure_cookies:
         logging.getLogger("pospy").warning("Escuchando en %s sin POS_SECURE_COOKIES=1: publíquelo solo detrás de HTTPS.",
                                            config.host)
+    if args.parent_pid:
+        watch_parent(args.parent_pid)
     ctx = AppContext(config)
     app = create_app(ctx, run_scheduler=True)
     uvicorn.run(app, host=config.host, port=config.port, log_config=None, workers=1, access_log=False)

@@ -294,8 +294,10 @@ def render(template: Path, mapping: Mapping, out: Path, header: dict, lines: lis
             wb.close()
         tmp.replace(out)
     finally:
-        if tmp.exists():
-            tmp.unlink()
+        try:
+            tmp.unlink(missing_ok=True)
+        except PermissionError:   # Excel aún libera el archivo; se reemplaza en la próxima generación
+            pass
     return out
 
 

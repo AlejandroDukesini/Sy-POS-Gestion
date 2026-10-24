@@ -222,3 +222,22 @@ def test_find_printer_reports_available_printers(monkeypatch):
     assert printers.find_printer("digitalpos") == "DIGITALPOS 80"
     with pytest.raises(printers.PrintError, match="No se encontró"):
         printers.find_printer("EPSON")
+
+
+def test_excel_busy_is_retried_but_other_errors_are_not():
+    calls = []
+
+    class Busy(Exception):
+        hresult = -2147418111
+
+    def flaky():
+        calls.append(1)
+        if len(calls) < 3:
+            raise Busy()
+        return "ok"
+    assert com_excel.with_retry(flaky, delay=0) == "ok" and len(calls) == 3
+
+    def broken():
+        raise ValueError("otro error")
+    with pytest.raises(ValueError):
+        com_excel.with_retry(broken, delay=0)

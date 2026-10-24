@@ -31,6 +31,8 @@ def com_available() -> bool:
 
 @contextmanager
 def excel_app() -> Iterator[Any]:
+    """Instancia propia e invisible de Excel. Al salir se cierra; si Excel no termina (referencias COM
+    pendientes), se finaliza solo ESE proceso, nunca otros Excel que la persona tenga abiertos."""
     try:
         import pythoncom
         import win32com.client
@@ -39,11 +41,13 @@ def excel_app() -> Iterator[Any]:
     with _com_lock:
         pythoncom.CoInitialize()
         app = None
+        pid = None
         try:
             try:
                 app = win32com.client.DispatchEx("Excel.Application")
             except Exception as exc:  # noqa: BLE001
                 raise ExcelError("Microsoft Excel no está disponible en este equipo.") from exc
+            pid = _pid_of(app)
             app.Visible = False
             app.DisplayAlerts = False
             app.ScreenUpdating = False
@@ -54,27 +58,90 @@ def excel_app() -> Iterator[Any]:
                     app.Quit()
                 except Exception:  # noqa: BLE001
                     pass
+                del app
+            import gc
+            gc.collect()
             pythoncom.CoUninitialize()
+            if pid:
+                _ensure_exited(pid)
+
+
+def _pid_of(app) -> int | None:
+    try:
+        import win32process
+        return win32process.GetWindowThreadProcessId(app.Hwnd)[1]
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _ensure_exited(pid: int, timeout_ms: int = 5000) -> None:
+    import ctypes
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(0x00100000 | 0x0001, False, pid)   # SYNCHRONIZE | PROCESS_TERMINATE
+    if not handle:
+        return
+    try:
+        if kernel32.WaitForSingleObject(handle, timeout_ms) != 0:     # sigue vivo
+            kernel32.TerminateProcess(handle, 0)
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+_BUSY = (-2147418111, -2147417846)   # RPC_E_CALL_REJECTED, RPC_E_SERVERCALL_RETRYLATER: Excel ocupado
+
+
+def with_retry(fn, attempts: int = 6, delay: float = 1.0):
+    """Reintenta una operación completa con Excel cuando este rechaza llamadas por estar ocupado."""
+    import time
+    for attempt in range(attempts):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001 - pywintypes.com_error solo existe con pywin32
+            code = getattr(exc, "hresult", None) or (exc.args[0] if exc.args else None)
+            if code not in _BUSY or attempt == attempts - 1:
+                raise
+            time.sleep(delay * (attempt + 1))
+    return None
 
 
 def apply_page_setup(ws, setup: dict) -> None:
-    ps = ws.PageSetup
-    ps.Orientation = 2 if setup.get("orientation") == "landscape" else 1
-    try:
-        ps.PaperSize = PAPER.get(str(setup.get("paper", "letter")).lower(), 1)
-    except Exception:  # noqa: BLE001 - la impresora puede no admitir el tamaño
-        pass
+    """Configura la página sin consultar al controlador en cada cambio (PrintCommunication = False)."""
+    import logging
+    app = ws.Application
+    values = {
+        "Orientation": 2 if setup.get("orientation") == "landscape" else 1,
+        "PaperSize": PAPER.get(str(setup.get("paper", "letter")).lower(), 1),
+    }
     points = float(setup.get("margins_cm", 1.5)) * 28.3465
-    ps.LeftMargin = ps.RightMargin = ps.TopMargin = ps.BottomMargin = points
+    for side in ("LeftMargin", "RightMargin", "TopMargin", "BottomMargin"):
+        values[side] = points
     if setup.get("fit_width", True):
-        ps.Zoom = False
-        ps.FitToPagesWide = 1
-        ps.FitToPagesTall = False
+        values.update({"Zoom": False, "FitToPagesWide": 1, "FitToPagesTall": False})
     else:
-        ps.Zoom = max(10, min(400, int(setup.get("scale", 100))))
+        values["Zoom"] = max(10, min(400, int(setup.get("scale", 100))))
+    try:
+        app.PrintCommunication = False
+    except Exception:  # noqa: BLE001 - versiones antiguas de Excel
+        pass
+    try:
+        ps = ws.PageSetup
+        for name, value in values.items():
+            try:
+                setattr(ps, name, value)
+            except Exception as exc:  # noqa: BLE001 - la impresora puede no admitir un valor (p. ej. tamaño)
+                logging.getLogger("pospy.excel").warning("No se aplicó %s=%s: %s", name, value, exc)
+    finally:
+        try:
+            app.PrintCommunication = True
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def write_cells(path: Path, sheet: str, cells: dict[str, Any], setup: dict) -> None:
+    with_retry(lambda: _write_cells(path, sheet, cells, setup))
+
+
+def _write_cells(path: Path, sheet: str, cells: dict[str, Any], setup: dict) -> None:
     with excel_app() as app:
         wb = app.Workbooks.Open(str(Path(path).resolve()), UpdateLinks=0)
         try:
@@ -96,12 +163,14 @@ def export_pdf(xlsx: Path, pdf: Path) -> Path:
             pdf.unlink()
         except PermissionError as exc:
             raise ExcelError(f"El PDF {pdf.name} está abierto en otro programa; ciérrelo.") from exc
-    with excel_app() as app:
-        wb = app.Workbooks.Open(str(xlsx), ReadOnly=True, UpdateLinks=0)
-        try:
-            wb.ExportAsFixedFormat(0, str(pdf))
-        finally:
-            wb.Close(SaveChanges=False)
+    def run() -> None:
+        with excel_app() as app:
+            wb = app.Workbooks.Open(str(xlsx), ReadOnly=True, UpdateLinks=0)
+            try:
+                wb.ExportAsFixedFormat(0, str(pdf))
+            finally:
+                wb.Close(SaveChanges=False)
+    with_retry(run)
     if not pdf.exists() or pdf.stat().st_size == 0:
         raise ExcelError("Excel no generó el PDF.")
     return pdf
