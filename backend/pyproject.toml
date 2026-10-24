@@ -1,0 +1,20 @@
+[project]
+name = "pospy"
+version = "1.0.0"
+description = "POS-PY: punto de venta y control de entradas y salidas (backend FastAPI + SQLite)."
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 130
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E9", "F", "B", "S", "UP", "I"]
+ignore = ["S101", "S608", "B008", "S110", "UP031"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:cacheprovider -q"

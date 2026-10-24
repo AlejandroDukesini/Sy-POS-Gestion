@@ -1,0 +1,28 @@
+# Datos del negocio, secretos y credenciales: nunca al repositorio
+backend/data/
+data/
+*.db
+*.db-wal
+*.db-shm
+secret.key
+setup-code.txt
+.env
+.env.*
+!.env.example
+
+# Entornos y compilados
+backend/.venv/
+**/__pycache__/
+*.pyc
+.ruff_cache/
+.pytest_cache/
+backend/build/
+backend/dist/
+frontend/node_modules/
+frontend/dist/
+frontend/dev-dist/
+desktop/node_modules/
+desktop/src-tauri/target/
+desktop/src-tauri/binaries/
+desktop/src-tauri/gen/
+*.log

@@ -1,0 +1,10 @@
+# Dependencias de ejecución verificadas con Python 3.13 en Windows 11.
+fastapi==0.118.0
+uvicorn==0.37.0
+python-multipart==0.0.20
+openpyxl==3.1.5
+httpx==0.28.1
+cryptography==46.0.3
+tzdata==2025.2
+# Impresión directa (win32print) y Excel COM: solo Windows.
+pywin32==312; sys_platform == "win32"
