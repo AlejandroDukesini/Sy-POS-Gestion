@@ -239,3 +239,5 @@ cd desktop; npm ci; npm run build                                 # instaladores
   `state` aleatorio de un solo uso que caduca en 10 minutos, más PKCE.
 * Los permisos no protegen contra alguien con acceso directo al archivo de la base: proteja la cuenta
   de Windows y use BitLocker.
+#   S y - P O S - G e s t i o n  
+ 
