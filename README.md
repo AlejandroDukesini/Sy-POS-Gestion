@@ -242,3 +242,15 @@ openpyxl no las conserva.
 - Las copias de seguridad contienen datos del negocio: guárdelas en un medio con acceso restringido.
 - Los permisos no protegen contra quien tenga acceso directo al archivo de la base: proteja la cuenta
   de Windows y use cifrado de disco (BitLocker).
+
+## Licencia
+
+© 2026 Café Con Alejo ([AlejandroDukesini](https://github.com/AlejandroDukesini)). Distribuido bajo
+[Creative Commons Atribución-NoComercial 4.0 Internacional (CC BY-NC 4.0)](https://creativecommons.org/licenses/by-nc/4.0/deed.es).
+Ver [`LICENSE`](LICENSE).
+
+- **Atribución**: toda copia, redistribución o adaptación debe dar crédito al autor, enlazar la
+  licencia e indicar si se hicieron cambios.
+- **No comercial**: no se permite su uso con fines comerciales.
+
+Para usos comerciales, contacte al autor.
