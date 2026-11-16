@@ -85,6 +85,14 @@ SCHEMA: dict[str, dict[str, Field]] = {
         "lockout_attempts": Field("int", 5, "Intentos fallidos antes del bloqueo", minimum=3, maximum=20),
         "lockout_minutes": Field("int", 15, "Minutos de bloqueo", minimum=1, maximum=240),
     },
+    "proveedores": {
+        "max_file_mb": Field("int", 10, "Tamaño máximo de archivos de proveedores (MB)", minimum=1, maximum=50),
+        "recent_visit_days": Field("int", 30, "Días para considerar una visita reciente", minimum=1, maximum=365),
+    },
+    "informes": {
+        "week_start": Field("choice", "lunes", "Primer día de la semana del negocio (el cierre semanal es el día anterior)",
+                            choices=("lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo")),
+    },
     "respaldos": {
         "auto_daily": Field("bool", True, "Copia automática diaria"),
         "keep": Field("int", 30, "Copias que se conservan", minimum=3, maximum=365),
@@ -98,7 +106,7 @@ SCHEMA: dict[str, dict[str, Field]] = {
 
 SECTION_LABELS = {
     "empresa": "Empresa", "ventas": "Ventas", "inventario": "Parámetros de inventario",
-    "impresion": "Impresión de comprobantes", "seguridad": "Sesiones y seguridad",
+    "impresion": "Impresión de comprobantes", "proveedores": "Expediente de proveedores", "informes": "Informes financieros", "seguridad": "Sesiones y seguridad",
     "respaldos": "Copias de seguridad", "oauth": "Credenciales de integraciones",
 }
 # Secciones que cualquier usuario autenticado puede leer (necesarias para operar la interfaz).

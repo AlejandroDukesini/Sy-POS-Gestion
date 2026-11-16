@@ -1,0 +1,167 @@
+{
+ "period": {
+  "kind": "semanal",
+  "kind_label": "Semanal",
+  "closure": "anticipado",
+  "closure_label": "Cierre anticipado",
+  "date_from": "2026-11-09",
+  "date_to": "2026-11-13",
+  "days": 5,
+  "period_days": 7,
+  "natural_end": "2026-11-15",
+  "in_progress": true,
+  "week_start": "lunes"
+ },
+ "data": {
+  "summary": {
+   "gross_sales": "80000.00",
+   "discounts": "8000.00",
+   "sales_total": "72000.00",
+   "returns": "18000.00",
+   "returns_count": 1,
+   "net_sales": "54000.00",
+   "net_tax": "8621.85",
+   "credit_sales": "18000.00",
+   "returns_credit_applied": "0.00",
+   "other_income_registered": "5000.00",
+   "received_sales": "54000.00",
+   "collections": "10000.00",
+   "collections_from_sales": "10000.00",
+   "collections_other": "0.00",
+   "other_income_received": "5000.00",
+   "refunds_paid": "18000.00",
+   "total_received": "51000.00",
+   "sales_count": 3,
+   "voided_count": 1,
+   "voided_total": "18000.00"
+  },
+  "by_method": [
+   {
+    "method_id": 1,
+    "name": "Efectivo",
+    "kind": "efectivo",
+    "sales": "38000.00",
+    "collections": "0.00",
+    "refunds": "18000.00",
+    "count": 2,
+    "net": "20000.00"
+   },
+   {
+    "method_id": 3,
+    "name": "Transferencia",
+    "kind": "transferencia",
+    "sales": "16000.00",
+    "collections": "10000.00",
+    "refunds": "0.00",
+    "count": 2,
+    "net": "26000.00"
+   }
+  ],
+  "by_kind": [
+   {
+    "kind": "efectivo",
+    "label": "Efectivo",
+    "net": "20000.00"
+   },
+   {
+    "kind": "transferencia",
+    "label": "Transferencias",
+    "net": "26000.00"
+   },
+   {
+    "kind": "otros_ingresos",
+    "label": "Otros ingresos (no ventas)",
+    "net": "5000.00"
+   }
+  ],
+  "by_day": [
+   {
+    "day": "2026-11-09",
+    "sales": 1,
+    "sales_total": "36000.00",
+    "returns": "0.00",
+    "received": "36000.00"
+   },
+   {
+    "day": "2026-11-12",
+    "sales": 2,
+    "sales_total": "36000.00",
+    "returns": "0.00",
+    "received": "18000.00"
+   },
+   {
+    "day": "2026-11-13",
+    "sales": 0,
+    "sales_total": "0.00",
+    "returns": "18000.00",
+    "received": "-3000.00"
+   }
+  ],
+  "other_income": [
+   {
+    "date": "2026-11-13",
+    "description": "Arriendo de vitrina",
+    "registered": "5000.00",
+    "received": "5000.00"
+   }
+  ],
+  "cash_check": {
+   "operational": "46000.00",
+   "journal": "46000.00",
+   "difference": "0.00"
+  },
+  "activity": {
+   "sales_count": 3,
+   "average_ticket": "24000.00",
+   "days_with_activity": 3,
+   "days_without_activity": 2,
+   "best_day": {
+    "day": "2026-11-09",
+    "received": "36000.00"
+   },
+   "worst_day": {
+    "day": "2026-11-13",
+    "received": "-3000.00"
+   }
+  },
+  "comparison": {
+   "date_from": "2026-11-02",
+   "date_to": "2026-11-06",
+   "days": 5,
+   "rows": [
+    {
+     "key": "net_sales",
+     "label": "Ventas netas",
+     "is_money": true,
+     "change_pct": null,
+     "current": "54000.00",
+     "previous": "0.00",
+     "difference": "54000.00"
+    },
+    {
+     "key": "total_received",
+     "label": "Total recibido",
+     "is_money": true,
+     "change_pct": null,
+     "current": "51000.00",
+     "previous": "0.00",
+     "difference": "51000.00"
+    },
+    {
+     "key": "sales_count",
+     "label": "Cantidad de ventas",
+     "is_money": false,
+     "change_pct": null,
+     "current": 3,
+     "previous": 0,
+     "difference": 3
+    }
+   ],
+   "previous_empty": true
+  }
+ },
+ "sha256": "103ef6fce0a614812f461ea25883ae29095275de4473bbbe68aab5855d4355f3",
+ "suggested_name": "Informe semanal del 9 de noviembre de 2026 al 15 de noviembre de 2026 (cierre anticipado al 13 de noviembre de 2026)",
+ "same_period": [],
+ "generated_at": "2026-11-12T18:51:57Z"
+}

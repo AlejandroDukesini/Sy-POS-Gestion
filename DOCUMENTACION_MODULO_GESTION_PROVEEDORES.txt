@@ -1,0 +1,340 @@
+DOCUMENTACIÓN — MÓDULO DE GESTIÓN DE PROVEEDORES (EXPEDIENTE POR PROVEEDOR)
+POS-PY · 12-11-2026
+==========================================================================================
+
+1. CÓMO FUNCIONABA ANTES
+------------------------------------------------------------------------------------------
+- Tabla suppliers (migración 1): nombre, NIT o cédula, teléfono, correo, dirección, días de
+  pago, activo, fechas y versión.
+- Pantalla Gestión › Proveedores: era la misma pantalla que la de clientes. Tenía un listado
+  paginado con búsqueda, la casilla «Incluir inactivos» y un diálogo de alta y edición.
+- Uso en otros módulos:
+  - Las compras a crédito (Inventario › Entrada › «Compra a crédito») crean una cuenta por
+    pagar (tabla payables, columna supplier_id).
+  - Finanzas › Cuentas por pagar lista y cobra esas deudas.
+- No había notas, visitas, cotizaciones, asesor ni archivos.
+- Permisos: crear y editar exigía «terceros.gestionar». La lista también la podían leer
+  quienes tienen «finanzas.ver» o «inventario.movimientos», para elegir proveedor en una compra.
+
+
+2. FUNCIONALIDADES INCORPORADAS
+------------------------------------------------------------------------------------------
+- Vista general nueva:
+  - Indicadores: total, activos, con pendientes, con visitas recientes y con cotizaciones.
+  - Buscador por nombre o NIT y filtro Activos / Inactivos / Todos.
+  - Botón «Nuevo proveedor».
+  - Cada fila muestra contacto, asesor, número de pendientes (en rojo si hay importantes),
+    última visita (con la marca «Reciente») y cotizaciones. Al pulsarla se abre el expediente.
+- Expediente individual con cinco pestañas: Resumen, Notas y pendientes, Visitas, Cotizaciones
+  y Lista de productos. Cada pestaña tiene su propia dirección
+  (/gestion/proveedores/<id>/notas, etc.), así que funcionan los botones atrás/adelante y los
+  enlaces directos.
+- Datos de contacto nuevos: WhatsApp, ciudad e información adicional. Todo se puede editar.
+- Asesor comercial: nombre, teléfono, correo y observaciones. Se puede cambiar cuando el
+  proveedor cambia de asesor.
+- Notas y pendientes, con estas categorías: deuda, pago, entrega, acuerdo, reclamación,
+  seguimiento y general. Cada nota se puede crear, consultar, editar y eliminar (con
+  confirmación). También admite:
+  - Estado pendiente o resuelta. Al resolverla se guarda la fecha.
+  - Marca de «importante» y fecha de vencimiento, que se resalta como «Vencida» si ya pasó.
+  - Fecha de creación y de última actualización.
+  - Historial: cada cambio y cada eliminación quedan en la auditoría inmutable con el valor
+    anterior.
+- Visitas: fecha, asesor, motivo, resumen, acuerdos y próxima visita.
+  - Cada visita es un registro independiente; registrar una nueva nunca sobrescribe las
+    anteriores.
+  - Se destaca «Última vez que vino».
+  - Si no se indica el asesor, se toma el asesor actual del proveedor.
+- Cotizaciones: número, emisión, vencimiento, asesor, descripción, valor total (opcional),
+  estado (pendiente, aceptada, rechazada o vencida), observaciones y un archivo adjunto
+  opcional (PDF, Excel o imagen).
+  - El historial completo se puede filtrar por estado; se destaca la más reciente.
+  - Una cotización pendiente cuya fecha de vencimiento ya pasó se marca «Venció» en pantalla,
+    sin cambiar su estado guardado.
+- Lista de productos del proveedor (.xlsx o .xls): subir, ver el nombre y la fecha de carga,
+  descargar el original byte a byte, reemplazar por una versión nueva y eliminar una versión
+  con confirmación.
+  - Las versiones anteriores se conservan; la más reciente es la «vigente».
+- Ajustes nuevos en Gestión › Ventas e inventario › «Expediente de proveedores»:
+  - Tamaño máximo de archivo: 10 MB por defecto, entre 1 y 50.
+  - Días para considerar una visita «reciente»: 30 por defecto.
+
+
+3. ESTRUCTURA DEL DASHBOARD
+------------------------------------------------------------------------------------------
+Encabezado
+  Nombre, NIT, código interno (P-0001…), fecha de registro y estado (Activo / Inactivo).
+
+Resumen
+  - Indicadores: notas pendientes (importantes y vencidas), última vez que vino (y próxima
+    visita), última cotización (fecha, estado y valor) y número de visitas y cotizaciones.
+  - Tarjeta «Contacto», con el botón Editar.
+  - Tarjeta «Asesor comercial», con el botón Cambiar o Registrar.
+  - Tarjeta «Lista de productos del proveedor»: archivo vigente, botón Descargar y enlace a
+    las versiones.
+
+Notas y pendientes
+  Filtros por estado y por categoría; botones Resolver/Reabrir y Eliminar; aviso de que las
+  notas son informativas.
+
+Visitas
+  Indicador «Última vez que vino» e historial, de la más reciente a la más antigua.
+
+Cotizaciones
+  Filtro por estado, tarjeta de la más reciente, historial y descarga del adjunto.
+
+Lista de productos
+  Archivo vigente, botón de subir o reemplazar, y tabla de versiones con Descargar y Eliminar.
+
+
+4. MODELO DE DATOS Y RELACIONES (SQLite)
+------------------------------------------------------------------------------------------
+suppliers (tabla existente, ampliada)
+  Columnas nuevas: whatsapp, city, contact_notes, advisor_name, advisor_phone, advisor_email
+  y advisor_notes. Todas son TEXT NOT NULL DEFAULT ''.
+
+supplier_notes   (N notas por proveedor)
+  supplier_id → suppliers.id
+  category (CHECK con 7 valores), title (obligatorio), body,
+  status (pendiente / resuelta), important (0/1), due_date,
+  created_by / updated_by → users.id,
+  created_at, updated_at, resolved_at, version
+
+supplier_visits  (N visitas por proveedor)
+  supplier_id → suppliers.id
+  visit_date, advisor_name, reason (obligatorio), summary, agreements, next_visit_date,
+  created_by → users.id, fechas, version
+
+supplier_quotes  (N cotizaciones por proveedor)
+  supplier_id → suppliers.id
+  number (obligatorio; UNIQUE por proveedor sin distinguir mayúsculas), issue_date,
+  due_date, advisor_name, description,
+  total_cents (opcional, ≥ 0, en centavos como el resto del POS),
+  status (CHECK con 4 valores), notes, created_by, fechas, version
+
+supplier_files   (metadatos de archivos; el contenido está en disco)
+  supplier_id → suppliers.id
+  kind: 'productos' (versiones de la lista) o 'cotizacion' (adjunto)
+  quote_id → supplier_quotes.id; es obligatorio solo si kind = 'cotizacion' (CHECK), y hay
+           como máximo un adjunto por cotización (índice único)
+  original_name (normalizado), stored_name (UNIQUE, generado por el servidor), content_type,
+  size_bytes, sha256, uploaded_by, uploaded_at
+
+Reglas de integridad
+  - Claves foráneas activas (PRAGMA foreign_keys = ON, como en todo el proyecto).
+  - No se borran proveedores: ya existía esa regla, y para retirar uno se desactiva. Al
+    desactivarlo, su expediente se conserva completo.
+  - Todas las consultas del expediente filtran por supplier_id. Un id de otro proveedor
+    responde 404, de modo que no se puede leer, editar ni borrar información ajena.
+  - No se duplican proveedores: cada nota, visita, cotización o archivo apunta al mismo
+    supplier_id. El NIT sigue siendo único (regla existente).
+  - Las tablas nuevas no tienen ninguna relación con products, inventory_movements, sales,
+    payables ni journal_entries, y el servicio no llama a ningún otro servicio de negocio.
+
+
+5. UBICACIÓN DE LOS ARCHIVOS EXCEL
+------------------------------------------------------------------------------------------
+  <carpeta de datos>\proveedores\<id del proveedor>\<AAAAMMDDhhmmss>-<aleatorio>.<ext>
+
+  - Aplicación de escritorio: %APPDATA%\com.pospy.app\data\proveedores\
+  - Servidor web en este equipo: backend\data\proveedores\
+
+  - El nombre en disco lo genera el servidor; el nombre original solo se guarda en la base y
+    se usa al descargar.
+  - Cada proveedor tiene su propia carpeta. Un archivo nuevo nunca reemplaza a otro existente.
+  - La interfaz no muestra rutas del equipo.
+
+POLÍTICA DE RESPALDO (importante)
+  Las copias de Gestión › Copias de seguridad incluyen la base de datos (notas, visitas,
+  cotizaciones y la lista de archivos), pero NO el contenido de los archivos. Así funcionan
+  también las plantillas de documentos. Para un respaldo completo, copie también la carpeta
+  «proveedores». Si un archivo falta en el disco:
+  - La pantalla lo marca como «No disponible».
+  - La descarga responde «El archivo ya no está en el disco», en lugar de fallar.
+
+
+6. CÓMO CARGAR Y DESCARGAR LISTAS DE PRODUCTOS
+------------------------------------------------------------------------------------------
+1. Abra Gestión › Proveedores y elija el proveedor.
+2. Vaya a la pestaña «Lista de productos».
+3. Pulse «Subir archivo de Excel». Si ya hay uno, el botón dice «Reemplazar por una versión
+   nueva». Elija un .xlsx o .xls.
+4. El servidor valida:
+   - La extensión.
+   - El contenido real: un .xlsx debe ser un libro de Excel válido, y un .xls debe tener la
+     firma de Excel 97-2003.
+   - Que el archivo no esté vacío y no supere el tamaño máximo configurado.
+   Si algo falla, el motivo aparece en la misma pantalla.
+5. Para descargar, use «Descargar original», en el Resumen o en la tabla de versiones. Se
+   descarga exactamente el archivo subido, con su nombre.
+6. Para eliminar, use «Eliminar» en la versión deseada y confirme. Las demás versiones se
+   conservan.
+
+El archivo NO se importa al inventario. Para importar productos use Inventario › Importar, que
+es una acción explícita y tiene vista previa.
+
+
+7. CÓMO ADMINISTRAR NOTAS, VISITAS Y COTIZACIONES
+------------------------------------------------------------------------------------------
+Notas
+  - «Nueva nota»: elija la categoría y escriba el título (obligatorio), el detalle, el
+    vencimiento (opcional) y si es importante.
+  - Pulse una fila para editarla.
+  - «Resolver» o «Reabrir» cambia el estado.
+  - «Eliminar» pide confirmación.
+  - La pestaña muestra por defecto los pendientes; «Resueltas» y «Todas» muestran el resto.
+
+Visitas
+  - «Registrar visita»: la fecha es obligatoria y no puede ser futura. El motivo es
+    obligatorio; el asesor, el resumen, los acuerdos y la próxima visita (posterior a la
+    visita) son opcionales.
+  - Pulse una fila para editarla. «Eliminar» pide confirmación.
+
+Cotizaciones
+  - «Registrar cotización»: el número y la fecha de emisión son obligatorios. Un número no
+    puede repetirse dentro del mismo proveedor (sí puede existir en otro proveedor).
+  - El valor admite «1.250.000,50» o «1250000.50».
+  - Puede adjuntar un archivo. Si ya tenía uno, el nuevo lo reemplaza.
+  - Pulse una fila para editarla. «Eliminar» borra la cotización y su adjunto, con
+    confirmación.
+
+Ninguna de estas acciones crea compras, cuentas por pagar, asientos ni movimientos de
+inventario.
+
+Permiso necesario: «Gestionar clientes y proveedores» (terceros.gestionar). Los
+administradores lo tienen; a un empleado se le puede asignar en Gestión › Empleados. Se valida
+en el servidor en cada operación.
+
+
+8. MIGRACIONES REALIZADAS
+------------------------------------------------------------------------------------------
+Migración 4: backend/pospy/migrations/v004_supplier_records.py
+  - Hace ALTER TABLE suppliers ADD COLUMN (7 columnas con valor por defecto) y crea 4 tablas
+    nuevas con sus índices.
+  - No modifica ni borra datos.
+  - Se aplica sola al arrancar. Una restauración de copia de seguridad antigua también la
+    aplica.
+  - Reversión manual: DOWN_SQL en el mismo archivo. Requiere SQLite 3.35 o posterior; lo
+    recomendado es restaurar una copia.
+
+Verificada sobre COPIAS de las bases reales de este equipo (los originales no se tocaron):
+  - backend/data/pospy.db (esquema 3 → 4): suppliers, products, sales, inventory_movements,
+    journal_entries, users, payables, customers y settings quedan idénticos. El proveedor
+    existente «Reypar» se conserva, con los campos nuevos vacíos.
+  - backend/data-respaldo-20261112-111903/pospy.db (esquema 2 → 4): todo idéntico.
+La base real se migrará sola la próxima vez que arranque el servidor.
+
+
+9. PRUEBAS EJECUTADAS
+------------------------------------------------------------------------------------------
+Backend (pytest), backend/tests/test_suppliers.py, 12 pruebas nuevas, todas en verde. En total
+hay 117 pruebas del proyecto, 0 fallos.
+  [x] Registro y edición de información general (versión optimista, NIT duplicado, nombre vacío)
+  [x] Registro y edición de contacto (WhatsApp, ciudad e información adicional) y del asesor
+      (correo inválido rechazado)
+  [x] Creación de varias notas
+  [x] Registro de una deuda informativa
+  [x] Marcado de una nota como resuelta (con resolved_at; creación y actualización conservadas)
+  [x] Consulta de notas pendientes y por categoría
+  [x] Edición y eliminación de notas (el contenido queda en la auditoría)
+  [x] Registro de varias visitas (fuera de orden; ninguna sobrescribe otra)
+  [x] Cálculo correcto de la última visita, también tras eliminar la más reciente
+  [x] Registro de varias cotizaciones e historial (orden, filtro por estado, más reciente,
+      número duplicado, vencimiento anterior a la emisión, valor negativo, vencida por fecha)
+  [x] Adjunto de cotización: subida, reemplazo (el anterior se borra del disco), descarga y
+      borrado junto con la cotización
+  [x] Carga de un Excel (.xlsx real generado con openpyxl) y de un .xls (firma de Excel 97-2003)
+  [x] Descarga del Excel original, byte a byte
+  [x] Reemplazo del Excel (la versión anterior se conserva y se marca la vigente)
+  [x] Eliminación de una versión sin afectar a las demás
+  [x] Archivos inválidos: .exe, .xlsx que no es Excel, archivo vacío, .xls con contenido zip,
+      zip sin libro, archivo mayor que el límite configurado (1 MB) y proveedor inexistente.
+      En todos los casos no queda nada en el disco.
+  [x] Rutas manipuladas («..\..\Windows\win.ini.xlsx», reservados como CON, caracteres
+      prohibidos) neutralizadas
+  [x] Asociación correcta y aislamiento: los registros y archivos de un proveedor no se
+      pueden leer, editar, descargar ni eliminar a través de otro (404)
+  [x] Permisos: sin «terceros.gestionar», 403; al asignarlo, acceso permitido
+  [x] Persistencia después de reiniciar (nuevo proceso sobre los mismos datos, incluido el
+      archivo)
+  [x] Conservación de los datos anteriores: un proveedor previo sigue sirviendo para una
+      compra a crédito, que crea su cuenta por pagar
+  [x] Ausencia de modificaciones en inventario y transacciones: products, existencias,
+      movimientos, ventas, cuentas por pagar, asientos y documentos quedan idénticos tras
+      notas de deuda, cotizaciones aceptadas y cargas de Excel
+
+Frontend
+  - vitest: 57 pruebas, 0 fallos (1 nueva: vista general de proveedores).
+  - TypeScript y ESLint sin errores; la compilación de producción es correcta.
+
+De extremo a extremo (Edge real contra el servidor real, npm run e2e): 28 verificaciones.
+  Las nuevas son: alta del proveedor con WhatsApp; nota de deuda creada y resuelta (aparece
+  en «Resueltas»); última visita calculada; Excel subido y descargado idéntico y con el mismo
+  nombre; archivo inválido rechazado con mensaje visible; inventario sin cambios. Las últimas
+  5 ejecuciones pasaron completas.
+
+
+10. PROBLEMAS ENCONTRADOS Y PENDIENTES
+------------------------------------------------------------------------------------------
+Encontrados y resueltos durante el trabajo
+  - Las pestañas del expediente usaban enlaces relativos que, con la configuración de rutas
+    del proyecto, se resolvían como «…/resumen/notas». Se cambiaron a rutas absolutas;
+    detectado por la prueba de extremo a extremo.
+  - Una prueba de la sesión anterior exigía exactamente el esquema 3; ahora exige 3 o más.
+  - La prueba de extremo a extremo «la barra lateral no se mueve al navegar» fallaba por
+    0,5 px. La barra es sticky y se mide con la página desplazada, lo que produce redondeo de
+    subpíxeles. Ahora tolera diferencias menores de 1 px; un desplazamiento real sigue
+    detectándose.
+  - Se añadió al e2e una captura de pantalla y la URL cuando algo falla, para diagnosticar
+    más rápido.
+
+Comportamiento anterior que se mantiene (no cambiado a propósito)
+  - Al editar un proveedor por la API sin enviar la identificación, esta se borra. Así
+    funcionaba antes; la interfaz siempre la envía. Los campos nuevos (WhatsApp, ciudad e
+    información adicional) sí se conservan si no se envían.
+
+Pendientes y limitaciones
+  - Las copias de seguridad no incluyen la carpeta «proveedores» (ver punto 5). Se puede
+    ampliar el servicio de respaldo para empaquetarla si lo desea.
+  - Los .xls (Excel 97-2003) se validan por su firma, no abriéndolos. Un .xls dañado con firma
+    correcta se aceptaría. Los .xlsx sí se validan por su estructura interna.
+  - No se previsualiza el contenido del Excel en pantalla; solo se descarga. La importación al
+    inventario sigue siendo la acción explícita de Inventario › Importar.
+  - El estado «vencida» de una cotización no cambia solo: se muestra la marca «Venció» y el
+    usuario decide si la marca como vencida.
+  - Las notas no se vinculan con las cuentas por pagar reales (lo pide el encargo). El saldo
+    contable del proveedor sigue en Finanzas › Cuentas por pagar.
+  - Si Windows mantiene abierto un archivo al borrarlo, la fila se elimina igual y el archivo
+    puede quedar huérfano en la carpeta; no afecta a los datos.
+  - La aplicación de escritorio instalada usa un backend compilado antes de estos cambios.
+    Hay que volver a compilarla (scripts/build_backend.py y Tauri) para incluir el módulo.
+
+
+ARCHIVOS CREADOS Y MODIFICADOS
+------------------------------------------------------------------------------------------
+Creados
+  backend/pospy/migrations/v004_supplier_records.py   Migración 4 (con DOWN_SQL)
+  backend/pospy/services/suppliers.py                 Servicio del expediente y de los archivos
+  backend/pospy/api/routes/suppliers.py               Rutas /api/suppliers/…
+  backend/tests/test_suppliers.py                     12 pruebas
+  frontend/src/pages/suppliers/SuppliersPage.tsx      Vista general
+  frontend/src/pages/suppliers/SupplierDashboard.tsx  Expediente con 5 pestañas
+  frontend/src/pages/suppliers/SupplierDialogs.tsx    Formularios: contacto, asesor, nota,
+                                                      visita y cotización
+  DOCUMENTACION_MODULO_GESTION_PROVEEDORES.txt        Este documento
+Modificados
+  backend/pospy/migrations/__init__.py                Registro de la migración 4
+  backend/pospy/services/catalog.py                   Proveedores: WhatsApp, ciudad e
+                                                      información adicional
+  backend/pospy/api/models.py                         Campos nuevos de Party y modelos del
+                                                      expediente
+  backend/pospy/core/settings.py                      Sección «proveedores» (tamaño máximo y
+                                                      días de visita reciente)
+  backend/pospy/context.py, backend/pospy/api/app.py  Conexión del servicio y de las rutas
+  backend/tests/test_access.py                        Versión de esquema «>= 3»
+  frontend/src/pages/manage/ManageRoutes.tsx          Rutas del módulo y ajustes de proveedores
+  frontend/src/test/screens.test.tsx                  Prueba de la vista general
+  frontend/e2e/smoke.mjs                              Recorrido del expediente y diagnóstico
+                                                      de fallos
+  README.md                                           Funcionalidad y ubicación de archivos
+  (frontend/tsconfig.tsbuildinfo cambió solo por la compilación)

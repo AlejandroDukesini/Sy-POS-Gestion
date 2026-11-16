@@ -1,0 +1,264 @@
+CORRECCIÓN FUNCIONAL — CONFIGURACIÓN INICIAL, AUTENTICACIÓN Y EMPLEADOS
+POS-PY · 12-11-2026
+==========================================================================================
+
+1. PROBLEMAS ENCONTRADOS
+------------------------------------------------------------------------------------------
+A. «Empleao»
+   Se buscó en todo el código fuente, la interfaz compilada (frontend/dist), la interfaz de
+   escritorio (desktop/ui), el backend empaquetado (desktop/src-tauri/binaries y target), la
+   documentación, el historial completo de git (git log -S «Empleao», todas las ramas) y la base
+   de datos local (backend/data/pospy.db, solo lectura). No aparece en ningún sitio.
+   La interfaz ya decía «Empleado» en todos los puntos visibles (rol en la barra superior, tabla
+   y diálogo de usuarios, mensajes de validación del backend). No hubo nada que corregir.
+   Si lo vio en pantalla, probablemente era una versión instalada más antigua o un dato escrito a
+   mano (por ejemplo, el nombre de un usuario). En ese caso, indique dónde aparece.
+   Identificadores internos: el rol se guarda como 'employee' (inglés, correcto). No se renombró
+   ninguna tabla, columna, ruta ni variable.
+
+B. El programa exigía crear una cuenta con contraseña desde el primer arranque.
+   La pantalla de instalación obligaba a crear un administrador con contraseña. Después, siempre
+   pedía usuario y contraseña. No existía forma de configurar antes la empresa ni de trabajar sin
+   inicio de sesión.
+
+C. Empleados.
+   - Un empleado solo podía existir como cuenta con usuario y contraseña obligatorios.
+   - El usuario no se podía cambiar después de crearlo.
+   - No existía ningún módulo de tareas en el sistema: no había tablas, rutas ni pantallas de
+     tareas. Por eso no se podía relacionar a un empleado con sus tareas.
+
+D. Encontrados durante las pruebas (ya existían antes de este trabajo):
+   - Preferencias: al abrir /configuracion directamente, la respuesta de /api/prefs podía
+     llegar después de que la persona eligiera un tema. Entonces sobrescribía la elección sin
+     guardar, y al pulsar «Guardar» se guardaba el tema anterior. Se reprodujo en la prueba de
+     extremo a extremo (2 de 6 ejecuciones).
+
+
+2. CAUSA RAÍZ
+------------------------------------------------------------------------------------------
+- AuthService.needs_setup() era «no hay usuarios». La única salida de ese estado era crear un
+  administrador con contraseña (setup_admin). No existía ningún estado de configuración del
+  acceso: ni «inicio de sesión activado o desactivado», ni «asistente terminado».
+- Toda la API exige una sesión (cookie) ligada a un usuario. Sin cuenta con contraseña no había
+  sesión posible.
+- users.password_hash es NOT NULL y la creación de usuarios exigía contraseña y política.
+
+
+3. ARCHIVOS MODIFICADOS
+------------------------------------------------------------------------------------------
+Backend (nuevos)
+  backend/pospy/migrations/v003_access.py   Migración 3 (con DOWN_SQL de reversión manual)
+  backend/pospy/services/access.py          Estado de acceso: inicio de sesión y asistente
+  backend/pospy/services/tasks.py           Tareas asignadas a empleados
+  backend/tests/test_access.py              14 pruebas de los escenarios A–D
+Backend (modificados)
+  backend/pospy/migrations/__init__.py      Registro de la migración 3
+  backend/pospy/services/auth.py            Asistente sin cuenta, acceso directo, sesiones directas
+  backend/pospy/services/users.py           Empleados sin cuenta, cambio de usuario, protección
+  backend/pospy/core/permissions.py         Permiso nuevo «tareas.gestionar»
+  backend/pospy/api/routes/auth.py          /setup/start, /setup/step, /setup/complete,
+                                            /auth/profiles, /auth/open; /me con estado de acceso
+  backend/pospy/api/routes/admin.py         /security, /security/login, /tasks, /tasks/assignees
+  backend/pospy/api/models.py               Modelos de entrada nuevos; usuario y contraseña
+                                            opcionales al crear
+  backend/pospy/context.py                  Conexión de los servicios nuevos
+  backend/pospy/cli.py                      create-admin comprueba «hay usuarios»
+Frontend (nuevos)
+  frontend/src/pages/SetupWizard.tsx        Asistente: Empresa › Preferencias › Seguridad ›
+                                            Empleados › Finalizar
+  frontend/src/pages/Profiles.tsx           «¿Quién está trabajando?» (acceso directo)
+  frontend/src/pages/manage/Security.tsx    Panel de seguridad (estado, activar/desactivar,
+                                            cuenta administrativa)
+  frontend/src/pages/tasks/TasksPage.tsx    Sección Tareas
+Frontend (modificados)
+  frontend/src/App.tsx                      Pantalla inicial: asistente / ingreso / perfiles; ruta /tareas
+  frontend/src/pages/Setup.tsx              Inicio del asistente sin cuenta (solo código de instalación)
+  frontend/src/pages/Login.tsx              Usuario precargado, «volver» y aviso opcionales
+  frontend/src/pages/ChangePassword.tsx     Permite asignar la primera contraseña
+  frontend/src/pages/manage/Users.tsx       Empleados con o sin cuenta, usuario editable, tareas asignadas
+  frontend/src/pages/manage/Settings.tsx    SettingsSection: saveLabel y onSaved opcionales
+  frontend/src/pages/manage/ManageRoutes.tsx  Seguridad con el panel nuevo; textos de empleados
+  frontend/src/components/layout/AppShell.tsx Sección «Tareas»; «Cambiar de perfil» en acceso directo
+  frontend/src/context/Auth.tsx             Estado de acceso y tipo de sesión
+  frontend/src/context/Prefs.tsx            Corrección de la condición de carrera (punto 1.D)
+  frontend/src/test/screens.test.tsx        4 pruebas de pantalla nuevas
+  frontend/e2e/smoke.mjs                    Recorre el asistente nuevo en navegador real
+  README.md                                 Flujo nuevo, acceso directo y limitaciones
+  (frontend/tsconfig.tsbuildinfo cambió solo por la compilación)
+
+
+4. CAMBIOS REALIZADOS
+------------------------------------------------------------------------------------------
+Modelo de datos — migración 3 (solo agrega; no modifica ni borra datos)
+  - sessions.open_mode (0/1): marca las sesiones abiertas sin contraseña.
+  - settings['acceso'] = {login_enabled, setup_completed, setup_step}.
+    Si la base ya tiene usuarios, la migración guarda {true, true, 'listo'}: la instalación
+    existente sigue igual que antes (inicio de sesión obligatorio).
+  - Tabla tasks (título, descripción, responsable, estado, fecha límite, autor, fechas, versión).
+    Un trigger impide borrar tareas; las tareas se cancelan.
+  - Un empleado sin cuenta se guarda con password_hash = ''. Esa cadena vacía nunca coincide con
+    ninguna contraseña. No hizo falta cambiar la columna.
+  - Reversión: v003_access.DOWN_SQL (restaure antes una copia de seguridad).
+
+Empleados
+  - Alta sin cuenta: basta el nombre. El usuario se genera solo («Ana María Pérez» →
+    ana.maria.perez, sin duplicados: luis, luis.2…). Opción «Crear cuenta de acceso».
+  - A un empleado sin cuenta se le puede crear la cuenta después («Crear cuenta» con una
+    contraseña temporal).
+  - El usuario, el nombre, el rol, el estado activo y los permisos se pueden editar.
+  - Desactivar no borra nada: los usuarios ya tenían un trigger que impide borrarlos.
+  - El diálogo de cada empleado muestra sus tareas asignadas. Sus responsabilidades son sus
+    permisos y sus tareas.
+  - Tareas: con el permiso «tareas.gestionar» (los administradores lo tienen) se crean, asignan y
+    editan. Sin ese permiso, cada persona ve solo sus tareas y solo puede cambiar su estado. No se
+    asignan tareas nuevas a empleados inactivos; las que ya tenían se conservan y se pueden
+    reasignar.
+
+
+5. FUNCIONAMIENTO DEL NUEVO FLUJO
+------------------------------------------------------------------------------------------
+Primera ejecución
+  1. La aplicación abre «Bienvenido a POS-PY» sin pedir cuenta.
+  2. Hace falta el código de instalación de un solo uso. En el escritorio (Tauri) llega solo por
+     el fragmento #setup=… y el asistente abre directamente. En el navegador se lee del archivo
+     <datos>/setup-code.txt.
+  3. Se crea el perfil «admin» (Administrador) sin contraseña, con una sesión de asistente.
+  4. Pasos: Empresa › Preferencias (ventas e inventario) › Seguridad › Empleados › Finalizar.
+     Cada avance se guarda en el servidor (setup_step).
+  5. Seguridad: estado actual, activar o desactivar el inicio de sesión, cambiar el usuario y el
+     nombre de la cuenta administrativa, asignar o cambiar la contraseña, y el cierre de sesión
+     automático (inactividad, duración máxima, intentos y bloqueo).
+     No se puede activar el inicio de sesión mientras no exista un administrador activo con
+     contraseña: el botón está deshabilitado y el servidor también lo rechaza.
+  6. Empleados: alta y edición con permisos, con o sin cuenta.
+  7. Finalizar: se borra el código de instalación.
+     - Con el inicio de sesión activado, se cierran las sesiones sin contraseña y se pide ingresar.
+     - Con el inicio de sesión desactivado, se entra directamente al sistema.
+
+Ejecuciones posteriores
+  - Inicio de sesión activado: pantalla «Iniciar sesión».
+  - Inicio de sesión desactivado: «¿Quién está trabajando?». Cada persona elige su perfil y
+    trabaja con SUS permisos. Los administradores con contraseña la siguen necesitando: se abre
+    el formulario de ingreso con su usuario. El botón «Salir» pasa a ser «Cambiar de perfil».
+  - Asistente incompleto: continúa en el último paso guardado. Si el administrador ya tenía
+    contraseña, se pide ingresar con ella y luego se retoma el asistente.
+  - Los cambios posteriores se hacen en Gestión › Sesiones y seguridad (enlazado desde
+    Configuración) y en Gestión › Empleados, usuarios y permisos.
+
+
+6. MEDIDAS DE SEGURIDAD IMPLEMENTADAS
+------------------------------------------------------------------------------------------
+- Contraseñas: hash scrypt con sal aleatoria (ya lo usaba el proyecto). Nunca se guardan en
+  texto plano ni en localStorage; la sesión es una cookie HttpOnly y SameSite=Strict. No se
+  cambió a Argon2id ni a bcrypt: scrypt es una función de derivación resistente a hardware que
+  OWASP acepta junto a esas dos, y cambiarla obligaría a volver a calcular todos los hashes.
+- Todos los permisos se validan en el backend; la interfaz solo oculta lo no autorizado.
+  Activar o desactivar el inicio de sesión, el asistente y la configuración de seguridad exigen
+  ser administrador: tener «gestion.configuracion», que nunca se puede asignar a un empleado, y
+  además rol de administrador.
+- No se puede activar el inicio de sesión sin un administrador con contraseña. Con el inicio de
+  sesión activado, tampoco se puede desactivar ni degradar al último administrador con
+  contraseña. Así el sistema nunca queda sin nadie que pueda entrar.
+- Desactivar el inicio de sesión solo cambia el indicador. No toca usuarios, contraseñas,
+  permisos ni tareas (verificado comparando la base antes y después).
+- Al activar el inicio de sesión se revocan las sesiones directas existentes. Además, cada
+  petición vuelve a comprobarlo, por si quedara alguna sesión abierta.
+- El acceso directo, el asistente y la consulta de perfiles solo se aceptan desde el propio
+  equipo (loopback). Desde la red siempre se exige contraseña.
+- La lista de perfiles no expone hashes ni datos sensibles: solo id, nombre, rol y si pide
+  contraseña.
+- Un usuario sin cuenta no puede iniciar sesión con contraseña. El intento recibe el mismo
+  mensaje y tarda lo mismo que una contraseña errónea, para no revelar qué usuarios no tienen
+  cuenta.
+- El asistente exige el código de instalación de un solo uso (comparación en tiempo constante),
+  que se borra al terminar.
+- Todo queda en la auditoría inmutable: instalación iniciada y completada, inicio de sesión
+  activado o desactivado, inicio directo, contraseña asignada, tareas.
+
+
+7. PRUEBAS EJECUTADAS Y RESULTADOS
+------------------------------------------------------------------------------------------
+Automáticas (todas en verde):
+  - Backend (pytest): 105 pruebas, 0 fallos. Son las 91 que ya existían, sin cambios, más las 14
+    nuevas de tests/test_access.py.
+  - Frontend (vitest): 56 pruebas, 0 fallos. Son las 52 existentes más 4 nuevas: asistente sin
+    cuenta, ingreso con autenticación activada, selección de perfil (el administrador con
+    contraseña la pide) y sección Tareas visible para empleados.
+  - TypeScript (tsc -b), ESLint y ruff: sin errores. Compilación de producción correcta.
+  - Prueba de extremo a extremo (Edge real contra el servidor real, npm run e2e): recorre el
+    asistente completo. Comprueba que no se puede activar el ingreso sin contraseña, asigna la
+    contraseña, activa el inicio de sesión, registra un empleado sin cuenta, finaliza e inicia
+    sesión. Luego sigue con la prueba existente (inventario, venta, finanzas, preferencias, móvil
+    y PWA). Las últimas 6 ejecuciones pasaron todas.
+    Antes, una verificación de la barra lateral (desplazamiento de 0,5 px al navegar) falló de
+    forma intermitente y luego dejó de reproducirse sin cambios de código. La causa probable es
+    el redondeo de subpíxeles con la página desplazada; no se confirmó.
+  - Compatibilidad con datos reales: se migró una COPIA de backend/data/pospy.db (el original no
+    se tocó). Resultado: esquema 3, inicio de sesión activado, instalación terminada, usuarios
+    idénticos (incluidos los hashes), empresa sin cambios y sin código de instalación nuevo.
+
+Escenario A — primera ejecución                                        (test_access.py)
+  [x] La aplicación abre sin exigir una cuenta.
+  [x] Se muestra el asistente de configuración inicial.
+  [x] Se puede configurar la empresa.
+  [x] Se puede acceder a la configuración de seguridad (paso Seguridad / Gestión › Seguridad).
+  [x] Se puede activar la autenticación (y se rechaza sin un administrador con contraseña).
+  [x] Se puede crear la cuenta administrativa (usuario y nombre editables, contraseña asignada).
+  [x] Se puede registrar un empleado (con o sin cuenta).
+  [x] La configuración persiste después de reiniciar (nuevo proceso sobre los mismos datos).
+  [x] El asistente se retoma en el último paso y no duplica el administrador.
+  [x] Solo desde el propio equipo; con el código inyectado por el escritorio.
+
+Escenario B — autenticación activada
+  [x] El siguiente arranque muestra el inicio de sesión (sin acceso directo).
+  [x] Las credenciales válidas permiten entrar.
+  [x] Las credenciales inválidas son rechazadas (401).
+  [x] Los permisos se respetan.
+  [x] Los empleados no autorizados no pueden modificar la configuración: 403 en
+      /settings/empresa, /security, /security/login y /users.
+
+Escenario C — autenticación desactivada
+  [x] Se permite el acceso directo (perfil sin contraseña).
+  [x] No se eliminan cuentas existentes (comparación completa de users antes y después).
+  [x] No se eliminan empleados ni permisos.
+  [x] Las tareas y asignaciones siguen funcionando: el empleado ve las suyas y cambia su estado;
+      no puede crear ni editar las de otros.
+  [x] La configuración persiste después de reiniciar.
+  [x] El administrador con contraseña la sigue necesitando; el empleado no puede cambiar la
+      seguridad (403).
+  [x] Al reactivar el inicio de sesión se cierran las sesiones directas; la del administrador
+      con contraseña sigue abierta.
+
+Escenario D — compatibilidad
+  [x] Los datos anteriores permanecen intactos (base creada con las migraciones 1 y 2 y
+      actualizada a la 3; también con la copia de la base real).
+  [x] No se rompen las relaciones entre empleados y tareas (desactivar a un empleado conserva
+      sus tareas; las tareas no se pueden borrar).
+  [x] No se generan cuentas duplicadas (asistente retomado; usuarios generados únicos).
+  [x] No se producen errores en otros módulos (las 91 pruebas previas y la prueba de extremo a
+      extremo siguen en verde).
+  [x] Todas las apariciones visibles de «Empleao» han sido corregidas: no existía ninguna
+      (ver 1.A).
+
+
+8. LIMITACIONES PENDIENTES
+------------------------------------------------------------------------------------------
+- Protección local, no de servidor. Con el inicio de sesión desactivado, la seguridad depende
+  de quién tiene acceso físico al equipo. Un administrador SIN contraseña puede ser elegido por
+  cualquiera en ese equipo; la interfaz lo advierte en Seguridad. Asigne siempre una contraseña
+  al administrador. Nadie protege el archivo de la base frente a quien tenga acceso
+  administrativo a Windows: use una cuenta de Windows con contraseña y BitLocker.
+- Detrás de un proxy inverso en el mismo equipo, todas las peticiones parecen locales y el
+  acceso directo quedaría expuesto a la red. Active el inicio de sesión antes de publicar el
+  servicio así (ya estaba documentado para la instalación inicial).
+- Para retomar el asistente después de cerrar la aplicación vuelve a hacer falta el código de
+  instalación. En el escritorio es automático (se genera uno nuevo en cada arranque); en el
+  navegador se lee de setup-code.txt.
+- Las contraseñas siguen con scrypt (ver punto 6), no con Argon2id ni bcrypt.
+- El módulo de tareas es básico: no tiene notificaciones, prioridades, comentarios ni adjuntos.
+- La migración 3 no tiene reversión automática. DOWN_SQL documenta los pasos manuales y
+  requiere SQLite 3.35 o posterior para DROP COLUMN; lo recomendado es restaurar una copia de
+  seguridad.
+- No se probó manualmente el instalador de escritorio (Tauri/NSIS). El flujo con el código
+  inyectado se verificó en la prueba de extremo a extremo con POS_SETUP_CODE, que es el mismo
+  mecanismo.

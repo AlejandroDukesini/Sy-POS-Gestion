@@ -18,7 +18,9 @@ const CHOICE_LABELS: Record<string, string> = {
 };
 
 /** Formulario generado desde el esquema de configuración del backend (mismos límites y validación). */
-export function SettingsSection({ section, title, exclude = [] }: { section: string; title?: string; exclude?: string[] }) {
+export function SettingsSection({ section, title, exclude = [], saveLabel = 'Guardar', onSaved }: {
+  section: string; title?: string; exclude?: string[]; saveLabel?: string; onSaved?: () => void;
+}) {
   const { notify } = useToast();
   const { refresh } = useAuth();
   const data = useApi('/settings');
@@ -38,6 +40,7 @@ export function SettingsSection({ section, title, exclude = [] }: { section: str
       setValues(saved);
       notify('success', 'Configuración guardada', schema.label);
       if (section === 'empresa') await refresh();
+      onSaved?.();
     } catch (err) {
       setError(err as ApiError);
     } finally {
@@ -72,7 +75,7 @@ export function SettingsSection({ section, title, exclude = [] }: { section: str
             return <TextField key={key} label={f.label} value={values[key] ?? ''} onChange={set} error={fe[key]} maxLength={f.max_len} />;
           })}
         </div>
-        <div className="form-actions"><Button variant="primary" busy={busy} icon={<Save size={20} />} onClick={save}>Guardar</Button></div>
+        <div className="form-actions"><Button variant="primary" busy={busy} icon={<Save size={20} />} onClick={save}>{saveLabel}</Button></div>
       </div>
     </Card>
   );

@@ -39,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     ctx = AppContext(Config.from_env())
     try:
         if args.cmd == "create-admin":
-            if not ctx.auth.needs_setup():
+            if ctx.auth.has_users():
                 print("Ya existe al menos un usuario. Use Gestión › Usuarios para crear más.")
                 return 1
             username = input("Usuario administrador: ").strip().lower()

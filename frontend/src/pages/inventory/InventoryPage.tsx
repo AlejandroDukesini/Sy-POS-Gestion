@@ -1,6 +1,6 @@
-import { ArrowDownToLine, ArrowUpFromLine, ClipboardCheck, History, Pencil, Plus, Power, Search, X } from 'lucide-react';
+import { ArrowDownToLine, ArrowUpFromLine, ClipboardCheck, ClipboardList, History, Pencil, Plus, Power, Search, X } from 'lucide-react';
 import { useState } from 'react';
-import { Route, Routes } from 'react-router-dom';
+import { Link, Route, Routes, useSearchParams } from 'react-router-dom';
 import { put, qs } from '../../api/client';
 import { Button } from '../../components/ui/Button';
 import { ConfirmDialog } from '../../components/ui/Dialog';
@@ -16,6 +16,8 @@ import { ImportExport } from './ImportExport';
 import { MovementDialog, type MovementKind } from './MovementDialog';
 import { MovementsTable } from './MovementsTable';
 import { ProductForm } from './ProductForm';
+import ObservationsRoutes from './observations/ObservationsPage';
+import { PriorityBadge, StatusBadge } from './observations/labels';
 
 export interface Product {
   id: number; code: string; description: string; category_id: number | null; category_name: string | null; unit: string;
@@ -32,11 +34,13 @@ export default function InventoryPage() {
       <LinkTabs label="Secciones de inventario" tabs={[
         { to: '/inventario', label: 'Productos', end: true },
         { to: '/inventario/movimientos', label: 'Movimientos' },
+        ...(can('observaciones.ver') ? [{ to: '/inventario/observaciones', label: 'Observaciones' }] : []),
         ...(can('inventario.importar') ? [{ to: '/inventario/importar', label: 'Importar y exportar' }] : []),
       ]} />
       <Routes>
         <Route index element={<Products />} />
         <Route path="movimientos" element={<Card><MovementsTable /></Card>} />
+        {can('observaciones.ver') && <Route path="observaciones/*" element={<ObservationsRoutes />} />}
         <Route path="importar" element={<ImportExport />} />
       </Routes>
     </>
@@ -52,13 +56,17 @@ function Products() {
   const [sort, setSort] = useState('code');
   const [direction, setDirection] = useState<'asc' | 'desc'>('asc');
   const [page, setPage] = useState(1);
-  const [selected, setSelected] = useState<number | null>(null);
+  const [params] = useSearchParams();
+  const [selected, setSelected] = useState<number | null>(Number(params.get('producto')) || null);
   const [editing, setEditing] = useState<Product | 'new' | null>(null);
   const search = useDebounced(q.trim(), 300);
   const list = useApi(`/products${qs({ q: search, category_id: category, status, low_stock: lowStock, sort, direction, page, page_size: 25 })}`);
   const categories = useApi<any[]>('/categories');
   const meta = useApi('/products/meta');
   const showCost = can('inventario.costos');
+  const pageIds = (list.data?.items ?? []).map((p: Product) => p.id).join(',');
+  const flags = useApi<Record<string, { open: number; critical: number }>>(
+    can('observaciones.ver') && pageIds ? `/observations/flags?ids=${pageIds}` : null);
 
   const onSort = (key: string) => {
     if (sort === key) setDirection(direction === 'asc' ? 'desc' : 'asc');
@@ -71,12 +79,13 @@ function Products() {
   const refresh = () => {
     list.reload();
     meta.reload();
+    flags.reload();
   };
 
   const columns: Column<Product>[] = [
     { key: 'code', header: 'Código', sortable: true, render: (p) => <strong className="nowrap">{p.code}</strong> },
     { key: 'description', header: 'Descripción', sortable: true, render: (p) => (
-      <span>{p.description}{!p.active && <> <Badge>Inactivo</Badge></>}</span>) },
+      <span>{p.description}{!p.active && <> <Badge>Inactivo</Badge></>}<ObservationFlag flag={flags.data?.[p.id]} /></span>) },
     { key: 'discount_price', header: 'Precio con descuento', numeric: true, sortable: true,
       render: (p) => (p.discount_price ? money(p.discount_price) : <span className="muted">—</span>) },
     { key: 'price', header: 'Precio sin descuento', numeric: true, sortable: true, render: (p) => money(p.price) },
@@ -243,6 +252,7 @@ function ProductPanel({ id, onClose, onChanged, onEdit }: {
                 </ul>
               ) : <p className="muted">Sin movimientos.</p>}
             </div>
+            {can('observaciones.ver') && <ProductObservations productId={p.id} />}
             <p className="muted" style={{ fontSize: '0.875rem' }}>La existencia solo cambia mediante movimientos registrados.</p>
           </div>
         )}
@@ -256,6 +266,54 @@ function ProductPanel({ id, onClose, onChanged, onEdit }: {
             : `«${p.description}» volverá a estar disponible para vender y cotizar.`} />
       )}
     </aside>
+  );
+}
+
+/** Indicador discreto en el listado: solo aparece si hay observaciones abiertas. */
+function ObservationFlag({ flag }: { flag?: { open: number; critical: number } }) {
+  if (!flag) return null;
+  const text = flag.critical
+    ? `${flag.critical} observación${flag.critical > 1 ? 'es' : ''} crítica${flag.critical > 1 ? 's' : ''}`
+    : `${flag.open} observación${flag.open > 1 ? 'es' : ''} pendiente${flag.open > 1 ? 's' : ''}`;
+  return <> <span className={`badge obs-flag${flag.critical ? ' obs-flag-critical' : ''}`} title={text}>
+    <ClipboardList size={14} aria-hidden /> <span className="sr-only">{text}</span><span aria-hidden>{flag.critical || flag.open}</span></span></>;
+}
+
+/** Observaciones del producto dentro de su ficha, con acceso al módulo completo. */
+function ProductObservations({ productId }: { productId: number }) {
+  const { can } = useAuth();
+  const data = useApi(`/observations${qs({ product_id: productId, page_size: 5 })}`);
+  const context = useApi<any>(`/observations/products/${productId}`);
+  const c = context.data;
+  return (
+    <div>
+      <h3 className="row" style={{ marginBottom: 8 }}><ClipboardList size={20} aria-hidden /> Observaciones</h3>
+      {c && (
+        <p style={{ margin: '0 0 8px' }}>
+          {c.open_observations === 0 ? <span className="muted">Sin observaciones pendientes.</span> : <>
+            <strong>{c.open_observations}</strong> {c.open_observations === 1 ? 'observación abierta' : 'observaciones abiertas'}
+            {c.critical_observations > 0 && <> · <span className="badge obs-priority obs-priority-critica">{c.critical_observations} crítica{c.critical_observations > 1 ? 's' : ''}</span></>}
+          </>}
+        </p>
+      )}
+      {data.loading && !data.data ? <Loading /> : data.data?.items.length ? (
+        <ul className="result-list">
+          {data.data.items.map((o: any) => (
+            <li key={o.id}>
+              <Link className="result-item" to={`/inventario/observaciones/${o.id}`}>
+                <span><strong>{o.code}</strong> · {o.category_name}<br /><small className="muted">{dateTime(o.created_at)}</small></span>
+                <span className="row" style={{ gap: 4, flexWrap: 'nowrap' }}><PriorityBadge priority={o.priority} /><StatusBadge status={o.status} /></span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <div className="row" style={{ marginTop: 8 }}>
+        {(c?.total_observations ?? 0) > 0 && <Link className="btn btn-ghost btn-sm" to={`/inventario/observaciones?producto=${productId}`}>Ver todas ({c.total_observations})</Link>}
+        {can('observaciones.crear') && <Link className="btn btn-outline btn-sm" to={`/inventario/observaciones?producto=${productId}&nueva=1`}>
+          <Plus size={16} aria-hidden /> Registrar observación</Link>}
+      </div>
+    </div>
   );
 }
 

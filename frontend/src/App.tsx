@@ -1,5 +1,5 @@
 import { Lock } from 'lucide-react';
-import { lazy, useCallback, useEffect, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from 'react';
 import { BrowserRouter, Link, Navigate, Route, Routes } from 'react-router-dom';
 import { get } from './api/client';
 import { AppShell, useSections } from './components/layout/AppShell';
@@ -9,13 +9,16 @@ import { PrefsProvider } from './context/Prefs';
 import { ToastProvider } from './context/Toast';
 import { ChangePasswordPage } from './pages/ChangePassword';
 import { LoginPage } from './pages/Login';
-import { SetupPage } from './pages/Setup';
+import { ProfilesPage } from './pages/Profiles';
+import { SetupPage, type SetupStatus } from './pages/Setup';
 
 const InventoryPage = lazy(() => import('./pages/inventory/InventoryPage'));
 const SellPage = lazy(() => import('./pages/sell/SellPage'));
 const FinanceRoutes = lazy(() => import('./pages/finance/FinanceRoutes'));
 const ManageRoutes = lazy(() => import('./pages/manage/ManageRoutes'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const SetupWizard = lazy(() => import('./pages/SetupWizard').then((m) => ({ default: m.SetupWizard })));
+const TasksPage = lazy(() => import('./pages/tasks/TasksPage'));
 
 /** La interfaz oculta lo no autorizado por comodidad; la autorización real la hace el backend. */
 export function RequirePermission({ any, children }: { any: string[]; children: ReactNode }) {
@@ -51,23 +54,36 @@ function AuthenticatedApp() {
         <Route path="finanzas/*" element={<RequirePermission any={['finanzas.ver']}><FinanceRoutes /></RequirePermission>} />
         <Route path="gestion/*" element={<RequirePermission any={MANAGE_PERMS}><ManageRoutes /></RequirePermission>} />
         <Route path="configuracion/*" element={<SettingsPage />} />
+        <Route path="tareas" element={<TasksPage />} />
         <Route path="*" element={<EmptyState title="Página no encontrada"><Link to="/" className="btn btn-outline">Ir al inicio</Link></EmptyState>} />
       </Route>
     </Routes>
   );
 }
 
+/**
+ * Qué pantalla mostrar al arrancar:
+ *  1. Configuración inicial pendiente → asistente (sin cuenta; continúa en el último paso guardado).
+ *  2. Inicio de sesión activado → pantalla de ingreso.
+ *  3. Inicio de sesión desactivado → elegir perfil (acceso directo), con los permisos de cada persona.
+ */
 function Gate() {
-  const { status, mustChangePassword } = useAuth();
-  const [setup, setSetup] = useState<any>(null);
+  const { status, mustChangePassword, user, access } = useAuth();
+  const [setup, setSetup] = useState<SetupStatus | null>(null);
   const checkSetup = useCallback(() => {
-    get('/setup/status').then(setSetup).catch(() => setSetup({ needs_setup: false }));
+    get<SetupStatus>('/setup/status').then(setSetup).catch(() => setSetup({ needs_setup: false } as SetupStatus));
   }, []);
-  useEffect(checkSetup, [checkSetup]);
+  // Se vuelve a consultar al iniciar o cerrar sesión (el modo de acceso puede haber cambiado).
+  useEffect(checkSetup, [checkSetup, status]);
 
   if (status === 'loading' || setup === null) return <Loading label="Iniciando POS-PY…" />;
-  if (setup.needs_setup) return <SetupPage status={setup} onDone={checkSetup} />;
-  if (status === 'anonymous') return <LoginPage />;
+  if (setup.needs_setup) {
+    if (status === 'authenticated' && user?.role === 'admin' && access && !access.setup_completed) {
+      return <Suspense fallback={<Loading />}><SetupWizard initialStep={access.setup_step} onDone={checkSetup} /></Suspense>;
+    }
+    if (status === 'anonymous') return <SetupPage status={setup} />;
+  }
+  if (status === 'anonymous') return setup.direct_access ? <ProfilesPage /> : <LoginPage />;
   if (mustChangePassword) return <ChangePasswordPage />;
   return <AuthenticatedApp />;
 }

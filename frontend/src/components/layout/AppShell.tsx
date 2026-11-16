@@ -1,4 +1,4 @@
-import { Boxes, Briefcase, LineChart, LogOut, Settings, ShoppingCart, WifiOff } from 'lucide-react';
+import { Boxes, Briefcase, ClipboardList, LineChart, LogOut, Settings, ShoppingCart, WifiOff } from 'lucide-react';
 import { Suspense, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/Auth';
@@ -18,16 +18,19 @@ export function useSections(): Section[] {
     { to: '/finanzas', label: 'Finanzas', icon: LineChart, visible: can('finanzas.ver') },
     { to: '/gestion', label: 'Gestión', icon: Briefcase, visible: canAny('gestion.usuarios', 'gestion.configuracion',
       'gestion.integraciones', 'gestion.respaldos', 'gestion.auditoria', 'terceros.gestionar') },
+    { to: '/tareas', label: 'Tareas', icon: ClipboardList, visible: true },
   ].filter((s) => s.visible);
 }
 
 const TITLES: [RegExp, string][] = [
   [/^\/inventario/, 'Inventario'], [/^\/vender\/documentos/, 'Cotizaciones y órdenes'], [/^\/vender\/historial/, 'Historial de ventas'],
   [/^\/vender/, 'Vender'], [/^\/finanzas/, 'Finanzas'], [/^\/gestion/, 'Gestión'], [/^\/configuracion/, 'Configuración'],
+  [/^\/tareas/, 'Tareas'],
 ];
 
 export function AppShell() {
-  const { user, company, logout } = useAuth();
+  const { user, company, logout, directSession, access } = useAuth();
+  const direct = directSession && Boolean(access?.setup_completed) && !access?.login_enabled;
   const sections = useSections();
   const online = useOnline();
   const location = useLocation();
@@ -69,12 +72,12 @@ export function AppShell() {
           <div className="topbar-actions">
             <div className="user-chip">
               <strong>{user?.full_name}</strong>
-              <small>{user?.role === 'admin' ? 'Administrador' : 'Empleado'}</small>
+              <small>{user?.role === 'admin' ? 'Administrador' : 'Empleado'}{direct ? ' · acceso directo' : ''}</small>
             </div>
             <Link to="/configuracion" className="btn btn-ghost btn-icon" title="Configuración">
               <Settings size={22} aria-hidden /><span className="sr-only">Configuración</span>
             </Link>
-            <Button variant="outline" icon={<LogOut size={20} />} onClick={() => setConfirmLogout(true)}>Salir</Button>
+            <Button variant="outline" icon={<LogOut size={20} />} onClick={() => setConfirmLogout(true)}>{direct ? 'Cambiar de perfil' : 'Salir'}</Button>
           </div>
         </header>
         {!online && (

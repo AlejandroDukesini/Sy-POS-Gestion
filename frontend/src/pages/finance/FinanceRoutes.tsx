@@ -3,10 +3,12 @@ import type { CSSProperties, ReactNode } from 'react';
 import { Link, Route, Routes } from 'react-router-dom';
 import { PageHeader } from '../../components/ui/Layout';
 import { AccountingPage } from './Accounting';
+import IncomeReportsRoutes from './IncomeReports';
 import { BalanceSheet, BreakEven, CashFlow } from './Reports';
 import { OpenItemsPage } from './OpenItems';
 
 const TILES = [
+  { to: 'informes', abbr: 'INF', name: 'Informes de ingresos', desc: 'Cuánto dinero ingresó por día, semana, mes o año; cierres anticipados, historial y exportación.', tone: 'success' },
   { to: 'bs', abbr: 'BS', name: 'Balance general', desc: 'Activos, pasivos y patrimonio a una fecha de corte, con comparación.', tone: 'primary' },
   { to: 'bep', abbr: 'BEP', name: 'Punto de equilibrio', desc: 'Ventas y unidades necesarias para cubrir los costos.', tone: 'success' },
   { to: 'cf', abbr: 'CF', name: 'Flujo de efectivo', desc: 'Entradas, salidas, saldos y proyección de caja.', tone: 'info' },
@@ -59,6 +61,7 @@ export default function FinanceRoutes() {
   return (
     <Routes>
       <Route index element={<FinanceHub />} />
+      <Route path="informes/*" element={<IncomeReportsRoutes />} />
       <Route path="bs" element={<BalanceSheet />} />
       <Route path="bep" element={<BreakEven />} />
       <Route path="cf" element={<CashFlow />} />

@@ -1,7 +1,13 @@
-"""Usuarios y permisos (solo administradores con gestion.usuarios)."""
+"""Usuarios, empleados y permisos (solo administradores con gestion.usuarios).
+
+Un empleado puede existir sin cuenta de acceso (password_hash = ''): recibe tareas y aparece en el
+acceso directo, pero no puede iniciar sesión con contraseña hasta que un administrador se la asigne.
+"""
 from __future__ import annotations
 
+import re
 import sqlite3
+import unicodedata
 
 from ..core import permissions as perms
 from ..core.actor import Actor
@@ -9,10 +15,11 @@ from ..core.audit import record
 from ..core.clock import iso
 from ..core.errors import ConflictError, NotFoundError, ValidationError
 from ..core.security import check_policy, hash_password
+from .access import AccessService
 from .auth import _clean_username
 
 PUBLIC_COLUMNS = ("id, username, full_name, role, active, must_change_password, locked_until, last_login_at,"
-                  " created_at, updated_at, version")
+                  " created_at, updated_at, version, (password_hash <> '') AS has_password")
 
 
 class UserService:
@@ -47,7 +54,6 @@ class UserService:
 
     def create(self, actor: Actor, data: dict) -> dict:
         actor.require("gestion.usuarios")
-        username = _clean_username(data.get("username", ""))
         full_name = (data.get("full_name") or "").strip()
         role = data.get("role", "employee")
         password = data.get("password") or ""
@@ -55,27 +61,35 @@ class UserService:
             raise ValidationError("Faltan datos.", {"full_name": "El nombre es obligatorio."})
         if role not in ("admin", "employee"):
             raise ValidationError("Rol no válido.", {"role": "Elija Administrador o Empleado."})
-        check_policy(password, username)
+        raw_username = (data.get("username") or "").strip()
+        if not raw_username and password:
+            raise ValidationError("Faltan datos.", {"username": "Una cuenta con contraseña necesita un usuario."})
+        username = _clean_username(raw_username) if raw_username else None
+        if password:
+            check_policy(password, username or "")
         requested = set(data.get("permissions") or perms.DEFAULT_EMPLOYEE)
         self._validate_assignable(actor, role, requested)
         with self.db.tx() as conn:
-            if conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():
+            if username is None:
+                username = _free_username(conn, full_name)
+            elif conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():
                 raise ConflictError("Ya existe un usuario con ese nombre.", {"username": "Elija otro nombre de usuario."})
             now = iso()
             cur = conn.execute("INSERT INTO users(username, full_name, role, password_hash, must_change_password,"
-                               " created_at, updated_at) VALUES (?,?,?,?,1,?,?)",
-                               (username, full_name, role, hash_password(password), now, now))
+                               " created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+                               (username, full_name, role, hash_password(password) if password else "",
+                                1 if password else 0, now, now))
             uid = cur.lastrowid
             if role == "employee":
                 conn.executemany("INSERT INTO user_permissions(user_id, permission) VALUES (?,?)",
                                  [(uid, p) for p in sorted(requested)])
-            record(conn, actor, "usuario.crear", "user", uid, {"usuario": username, "rol": role,
+            record(conn, actor, "usuario.crear", "user", uid, {"usuario": username, "rol": role, "cuenta": bool(password),
                                                               "permisos": sorted(requested) if role == "employee" else "todos"})
             return self._get(conn, uid)
 
     def update(self, actor: Actor, user_id: int, data: dict) -> dict:
         actor.require("gestion.usuarios")
-        allowed = {"full_name", "role", "active", "permissions", "version"}
+        allowed = {"username", "full_name", "role", "active", "permissions", "version"}
         if set(data) - allowed:
             raise ValidationError("Campos no permitidos: " + ", ".join(sorted(set(data) - allowed)))
         with self.db.tx() as conn:
@@ -92,6 +106,14 @@ class UserService:
                 admins = conn.execute("SELECT COUNT(*) FROM users WHERE role = 'admin' AND active = 1").fetchone()[0]
                 if admins <= 1:
                     raise ValidationError("Debe existir al menos un administrador activo.")
+                if (user["has_password"] and AccessService(self.db).state(conn)["login_enabled"]
+                        and AccessService.admins_with_password(conn, exclude_id=user_id) == 0):
+                    raise ValidationError("Con el inicio de sesión activo debe quedar al menos un administrador con contraseña.")
+            username = user["username"]
+            if "username" in data and (data["username"] or "").strip().lower() != user["username"]:
+                username = _clean_username(data["username"])
+                if conn.execute("SELECT 1 FROM users WHERE username = ? AND id <> ?", (username, user_id)).fetchone():
+                    raise ConflictError("Ya existe un usuario con ese nombre.", {"username": "Elija otro nombre de usuario."})
             full_name = (data.get("full_name", user["full_name"]) or "").strip()
             if not full_name:
                 raise ValidationError("Faltan datos.", {"full_name": "El nombre es obligatorio."})
@@ -114,11 +136,11 @@ class UserService:
                 if before != after:
                     changes["permisos"] = {"agregados": sorted(after - before), "retirados": sorted(before - after)}
                     revoke = True
-            conn.execute("UPDATE users SET full_name = ?, role = ?, active = ?, updated_at = ?, version = version + 1,"
-                         " session_version = session_version + ? WHERE id = ?",
-                         (full_name, role, active, iso(), 1 if revoke else 0, user_id))
-            for key, old, new in (("nombre", user["full_name"], full_name), ("rol", user["role"], role),
-                                  ("activo", user["active"], active)):
+            conn.execute("UPDATE users SET username = ?, full_name = ?, role = ?, active = ?, updated_at = ?,"
+                         " version = version + 1, session_version = session_version + ? WHERE id = ?",
+                         (username, full_name, role, active, iso(), 1 if revoke else 0, user_id))
+            for key, old, new in (("usuario", user["username"], username), ("nombre", user["full_name"], full_name),
+                                  ("rol", user["role"], role), ("activo", user["active"], active)):
                 if old != new:
                     changes[key] = {"antes": old, "despues": new}
             if changes:
@@ -156,3 +178,16 @@ class UserService:
     @staticmethod
     def catalog() -> list[dict]:
         return [{"code": p.code, "label": p.label, "group": p.group, "admin_only": p.admin_only} for p in perms.CATALOG]
+
+
+def _free_username(conn: sqlite3.Connection, full_name: str) -> str:
+    """Usuario interno para un empleado sin cuenta (ej.: «Ana María Pérez» -> ana.maria.perez)."""
+    ascii_name = unicodedata.normalize("NFKD", full_name).encode("ascii", "ignore").decode().lower()
+    base = re.sub(r"[^a-z0-9]+", ".", ascii_name).strip(".")[:32] or "empleado"
+    if len(base) < 3:
+        base = f"{base}.emp"
+    candidate, n = base, 1
+    while conn.execute("SELECT 1 FROM users WHERE username = ?", (candidate,)).fetchone():
+        n += 1
+        candidate = f"{base}.{n}"
+    return candidate

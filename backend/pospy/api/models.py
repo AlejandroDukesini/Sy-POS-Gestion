@@ -30,20 +30,53 @@ class Setup(Strict):
     password: str = Field(max_length=200)
 
 
+class SetupStart(Strict):
+    code: str = Field(max_length=40)
+
+
+class SetupStep(Strict):
+    step: Literal["empresa", "preferencias", "seguridad", "empleados", "listo"]
+
+
+class OpenSession(Strict):
+    user_id: int
+
+
+class LoginToggle(Strict):
+    enabled: bool
+
+
+class TaskIn(Strict):
+    title: str = Field(max_length=200)
+    description: str | None = Field(default="", max_length=2000)
+    assignee_id: int
+    due_date: str | None = Field(default=None, max_length=10)
+
+
+class TaskUpdate(Strict):
+    title: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=2000)
+    assignee_id: int | None = None
+    due_date: str | None = Field(default=None, max_length=10)
+    status: Literal["pendiente", "en_curso", "completada", "cancelada"] | None = None
+    version: int | None = None
+
+
 class ChangePassword(Strict):
     current: str = Field(max_length=200)
     password: str = Field(max_length=200)
 
 
 class UserCreate(Strict):
-    username: str = Field(max_length=40)
+    username: str | None = Field(default=None, max_length=40)       # opcional para empleados sin cuenta
     full_name: str = Field(max_length=120)
     role: Literal["admin", "employee"] = "employee"
-    password: str = Field(max_length=200)
+    password: str | None = Field(default=None, max_length=200)      # sin contraseña: empleado sin cuenta de acceso
     permissions: list[str] | None = None
 
 
 class UserUpdate(Strict):
+    username: str | None = Field(default=None, max_length=40)
     full_name: str | None = Field(default=None, max_length=120)
     role: Literal["admin", "employee"] | None = None
     active: bool | None = None
@@ -97,6 +130,9 @@ class Party(Strict):
     address: str | None = Field(default="", max_length=200)
     credit_days: int | None = None
     payment_days: int | None = None
+    whatsapp: str | None = Field(default=None, max_length=60)          # solo proveedores
+    city: str | None = Field(default=None, max_length=80)              # solo proveedores
+    contact_notes: str | None = Field(default=None, max_length=1000)   # solo proveedores
     active: bool = True
     version: int | None = None
 
@@ -304,3 +340,90 @@ class GoogleSecret(Strict):
 class Restore(Strict):
     file: str = Field(max_length=80)
     confirm: Literal["RESTAURAR"]
+
+
+# ------------------------------------------------------------------ expediente de proveedores
+class SupplierAdvisor(Strict):
+    advisor_name: str | None = Field(default="", max_length=120)
+    advisor_phone: str | None = Field(default="", max_length=60)
+    advisor_email: str | None = Field(default="", max_length=120)
+    advisor_notes: str | None = Field(default="", max_length=1000)
+
+
+class SupplierNote(Strict):
+    category: Literal["deuda", "pago", "entrega", "acuerdo", "reclamacion", "seguimiento", "general"] | None = None
+    title: str | None = Field(default=None, max_length=200)
+    body: str | None = Field(default=None, max_length=4000)
+    status: Literal["pendiente", "resuelta"] | None = None
+    important: bool | None = None
+    due_date: str | None = Field(default=None, max_length=10)
+    version: int | None = None
+
+
+class SupplierVisit(Strict):
+    visit_date: str | None = Field(default=None, max_length=10)
+    advisor_name: str | None = Field(default=None, max_length=120)
+    reason: str | None = Field(default=None, max_length=200)
+    summary: str | None = Field(default=None, max_length=4000)
+    agreements: str | None = Field(default=None, max_length=4000)
+    next_visit_date: str | None = Field(default=None, max_length=10)
+    version: int | None = None
+
+
+class SupplierQuote(Strict):
+    number: str | None = Field(default=None, max_length=60)
+    issue_date: str | None = Field(default=None, max_length=10)
+    due_date: str | None = Field(default=None, max_length=10)
+    advisor_name: str | None = Field(default=None, max_length=120)
+    description: str | None = Field(default=None, max_length=4000)
+    total: Num | None = None
+    status: Literal["pendiente", "aceptada", "rechazada", "vencida"] | None = None
+    notes: str | None = Field(default=None, max_length=4000)
+    version: int | None = None
+
+
+class FinancialReportRequest(Strict):
+    kind: Literal["diario", "semanal", "mensual", "anual", "personalizado"]
+    date_from: str = Field(max_length=10)
+    date_to: str = Field(max_length=10)
+    name: str | None = Field(default=None, max_length=160)
+    notes: str | None = Field(default=None, max_length=4000)
+    allow_same_period: bool = False
+
+
+class FinancialReportNote(Strict):
+    category: Literal["general", "incidencia", "diferencia_caja", "aclaracion", "extraordinaria"] = "general"
+    body: str = Field(max_length=4000)
+    amount: Num | None = None
+    version: int | None = None
+
+
+# ------------------------------------------------------------------ observaciones de inventario
+class Observation(Strict):
+    product_id: int | None = None
+    category_id: int | None = None
+    priority: Literal["baja", "media", "alta", "critica"] | None = None
+    description: str | None = Field(default=None, max_length=2000)
+    qty: Num | None = None
+    supplier_id: int | None = None
+    reference_doc: str | None = Field(default=None, max_length=80)
+    detected_on: str | None = Field(default=None, max_length=10)
+    follow_up_date: str | None = Field(default=None, max_length=10)
+    notes: str | None = Field(default=None, max_length=2000)
+    assigned_to: int | None = None
+    comment: str | None = Field(default=None, max_length=2000)
+    version: int | None = None
+
+
+class ObservationStatus(Strict):
+    status: Literal["pendiente", "en_proceso", "resuelta", "cerrada"]
+    comment: str | None = Field(default="", max_length=2000)
+    version: int | None = None
+
+
+class ObservationComment(Strict):
+    comment: str = Field(max_length=2000)
+
+
+class ObservationDelete(Strict):
+    reason: str = Field(max_length=300)

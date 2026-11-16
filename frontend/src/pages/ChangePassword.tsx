@@ -16,11 +16,13 @@ export function PasswordForm({ onDone }: { onDone?: () => void }) {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
+  // Un perfil sin contraseña (creado en el asistente o sin cuenta) asigna aquí la primera.
+  const hasPassword = user?.has_password !== false;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     const local: Record<string, string> = {};
-    if (!current) local.current = 'Escriba su contraseña actual.';
+    if (hasPassword && !current) local.current = 'Escriba su contraseña actual.';
     if (password.length < 10) local.password = 'Al menos 10 caracteres, con letras y números.';
     if (user && password.toLowerCase().includes(user.username.toLowerCase())) local.password = 'No puede contener su usuario.';
     if (password !== confirm) local.confirm = 'Las contraseñas no coinciden.';
@@ -29,8 +31,9 @@ export function PasswordForm({ onDone }: { onDone?: () => void }) {
     setBusy(true);
     setError(null);
     try {
-      await post('/auth/password', { current, password });
-      notify('success', 'Contraseña actualizada', 'Las demás sesiones abiertas se cerraron.');
+      await post('/auth/password', { current: hasPassword ? current : '', password });
+      notify('success', hasPassword ? 'Contraseña actualizada' : 'Contraseña asignada',
+        hasPassword ? 'Las demás sesiones abiertas se cerraron.' : 'Ya puede usarla para iniciar sesión.');
       setCurrent('');
       setPassword('');
       setConfirm('');
@@ -47,14 +50,16 @@ export function PasswordForm({ onDone }: { onDone?: () => void }) {
   return (
     <form className="stack" onSubmit={submit} noValidate>
       <ErrorAlert error={error} />
-      <TextField label="Contraseña actual" type="password" value={current} onChange={setCurrent} error={errors.current}
-        autoComplete="current-password" required />
+      {hasPassword ? (
+        <TextField label="Contraseña actual" type="password" value={current} onChange={setCurrent} error={errors.current}
+          autoComplete="current-password" required />
+      ) : <Alert kind="info">Su perfil aún no tiene contraseña. Asígnele una para poder iniciar sesión con ella.</Alert>}
       <TextField label="Nueva contraseña" type="password" value={password} onChange={setPassword} error={errors.password}
         hint="Mínimo 10 caracteres, con letras y números." autoComplete="new-password" required />
       <TextField label="Repita la nueva contraseña" type="password" value={confirm} onChange={setConfirm} error={errors.confirm}
         autoComplete="new-password" required />
       <div className="form-actions">
-        <Button type="submit" variant="primary" busy={busy} icon={<KeyRound size={20} />}>Guardar contraseña</Button>
+        <Button type="submit" variant="primary" busy={busy} icon={<KeyRound size={20} />}>{hasPassword ? 'Guardar contraseña' : 'Asignar contraseña'}</Button>
       </div>
     </form>
   );

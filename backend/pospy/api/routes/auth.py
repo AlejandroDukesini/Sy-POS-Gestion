@@ -11,7 +11,7 @@ from ...core.actor import Actor
 from ...core.errors import PermissionDenied
 from ...core.settings import PUBLIC_READ
 from ..deps import COOKIE, actor, actor_any, ctx, session_token
-from ..models import ChangePassword, Login, Setup
+from ..models import ChangePassword, Login, OpenSession, Setup, SetupStart, SetupStep
 from ..serialize import out
 
 router = APIRouter(tags=["sesión"])
@@ -25,28 +25,78 @@ def _is_local(request: Request) -> bool:
         return host in ("localhost", "testclient")
 
 
+def _set_session(app: AppContext, response: Response, token: str) -> None:
+    max_age = app.settings.get("seguridad")["session_max_hours"] * 3600
+    response.set_cookie(COOKIE, token, httponly=True, samesite="strict", secure=app.config.secure_cookies,
+                        max_age=max_age, path="/")
+
+
+def _require_local(request: Request, what: str) -> None:
+    if not _is_local(request):
+        raise PermissionDenied(f"{what} solo se permite desde el propio equipo donde está instalado POS-PY.")
+
+
 @router.get("/setup/status")
 def setup_status(request: Request, app: AppContext = Depends(ctx)):
-    needs = app.auth.needs_setup()
-    return {"needs_setup": needs, "local": _is_local(request),
-            "code_file": str(app.auth.setup_file) if needs and _is_local(request) and not app.config.setup_code else None,
+    """Público: indica a la interfaz qué pantalla mostrar (asistente, acceso directo o inicio de sesión)."""
+    state = app.access.state()
+    needs = not state["setup_completed"]
+    local = _is_local(request)
+    return {"needs_setup": needs, "setup_step": state["setup_step"], "login_enabled": state["login_enabled"],
+            "direct_access": local and state["setup_completed"] and not state["login_enabled"],
+            "local": local,
+            "code_file": str(app.auth.setup_file) if needs and local and not app.config.setup_code else None,
             "code_injected": bool(app.config.setup_code) and needs}
 
 
 @router.post("/setup")
 def setup(body: Setup, request: Request, app: AppContext = Depends(ctx)):
-    if not _is_local(request):
-        raise PermissionDenied("La instalación inicial solo se puede hacer desde el propio equipo del servidor.")
+    """Instalación clásica: crea el administrador con contraseña e inicio de sesión activo."""
+    _require_local(request, "La instalación inicial")
     app.auth.setup_admin(body.code, body.username, body.full_name, body.password)
     return {"ok": True}
+
+
+@router.post("/setup/start")
+def setup_start(body: SetupStart, request: Request, response: Response, app: AppContext = Depends(ctx)):
+    """Abre o retoma el asistente de configuración inicial sin exigir cuenta (local + código de instalación)."""
+    _require_local(request, "La configuración inicial")
+    result = app.auth.start_setup(body.code, request.headers.get("user-agent", ""))
+    _set_session(app, response, result.token)
+    return {"user": _me(app, result.actor), "access": app.access.state()}
+
+
+@router.put("/setup/step")
+def setup_step(body: SetupStep, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    return app.access.set_step(current, body.step)
+
+
+@router.post("/setup/complete")
+def setup_complete(current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    state = app.access.complete_setup(current)
+    app.auth.discard_setup_code()
+    return state
+
+
+@router.get("/auth/profiles")
+def profiles(request: Request, app: AppContext = Depends(ctx)):
+    """Acceso directo (inicio de sesión desactivado): perfiles activos para elegir, solo desde el propio equipo."""
+    _require_local(request, "El acceso directo")
+    return app.auth.profiles()
+
+
+@router.post("/auth/open")
+def open_session(body: OpenSession, request: Request, response: Response, app: AppContext = Depends(ctx)):
+    _require_local(request, "El acceso directo")
+    result = app.auth.open_session(body.user_id, request.headers.get("user-agent", ""))
+    _set_session(app, response, result.token)
+    return {"user": _me(app, result.actor), "must_change_password": False}
 
 
 @router.post("/auth/login")
 def login(body: Login, request: Request, response: Response, app: AppContext = Depends(ctx)):
     result = app.auth.login(body.username, body.password, request.headers.get("user-agent", ""))
-    max_age = app.settings.get("seguridad")["session_max_hours"] * 3600
-    response.set_cookie(COOKIE, result.token, httponly=True, samesite="strict", secure=app.config.secure_cookies,
-                        max_age=max_age, path="/")
+    _set_session(app, response, result.token)
     return {"user": _me(app, result.actor), "must_change_password": result.must_change_password}
 
 
@@ -72,10 +122,12 @@ def _me(app: AppContext, a: Actor) -> dict:
 @router.get("/me")
 def me(request: Request, current: Actor = Depends(actor_any), app: AppContext = Depends(ctx)):
     company = app.settings.get("empresa")
-    return {"user": _me(app, current), "must_change_password": request.state.must_change,
+    return {"user": {**_me(app, current), "has_password": app.auth.has_password(current.id)},
+            "must_change_password": request.state.must_change,
             "company": {"name": company["name"], "primary_color": company["primary_color"],
                         "currency_symbol": company["currency_symbol"], "timezone": company["timezone"]},
-            "desktop": app.config.desktop}
+            "desktop": app.config.desktop, "access": app.access.state(),
+            "direct_session": app.auth.is_direct(session_token(request))}
 
 
 @router.get("/permissions/catalog")

@@ -97,6 +97,15 @@ class CatalogService:
             "email": _text(data, "email", "El correo", max_len=120),
             "address": _text(data, "address", "La dirección", max_len=200),
         }
+        if kind == "proveedores":
+            # Contacto ampliado del expediente; si no se envía un campo, se conserva el valor guardado.
+            current_row = conn.execute("SELECT * FROM suppliers WHERE id = ?", (party_id,)).fetchone() if party_id else None
+            for key, label, max_len in (("whatsapp", "El WhatsApp", 60), ("city", "La ciudad", 80),
+                                        ("contact_notes", "La información adicional", 1000)):
+                if key in data:
+                    values[key] = _text(data, key, label, max_len=max_len)
+                elif current_row is not None:
+                    values[key] = current_row[key]
         if values["email"] and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", values["email"]):
             raise ValidationError("Correo no válido.", {"email": "Escriba un correo como nombre@dominio.com."})
         try:

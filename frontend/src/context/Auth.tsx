@@ -8,6 +8,13 @@ export interface User {
   full_name: string;
   role: 'admin' | 'employee';
   permissions: string[];
+  has_password?: boolean;
+}
+
+export interface Access {
+  login_enabled: boolean;
+  setup_completed: boolean;
+  setup_step: string;
 }
 
 export interface Company {
@@ -23,6 +30,10 @@ interface AuthState {
   company: Company | null;
   mustChangePassword: boolean;
   desktop: boolean;
+  /** Estado del inicio de sesión y del asistente de configuración inicial. */
+  access: Access | null;
+  /** La sesión actual se abrió sin contraseña (asistente o acceso directo). */
+  directSession: boolean;
   can: (...perms: string[]) => boolean;
   canAny: (...perms: string[]) => boolean;
   login: (username: string, password: string) => Promise<void>;
@@ -39,6 +50,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [company, setCompany] = useState<Company | null>(null);
   const [mustChangePassword, setMustChange] = useState(false);
   const [desktop, setDesktop] = useState(false);
+  const [access, setAccess] = useState<Access | null>(null);
+  const [directSession, setDirect] = useState(false);
   const [expiredMessage, setExpired] = useState('');
 
   const refresh = useCallback(async () => {
@@ -48,6 +61,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setCompany(me.company);
       setMustChange(me.must_change_password);
       setDesktop(Boolean(me.desktop));
+      setAccess(me.access ?? null);
+      setDirect(Boolean(me.direct_session));
       configureFormat(me.company.currency_symbol, me.company.timezone);
       document.documentElement.style.setProperty('--brand', me.company.primary_color);
       setStatus('authenticated');
@@ -95,11 +110,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const value = useMemo<AuthState>(() => {
     const perms = new Set(user?.permissions ?? []);
     return {
-      status, user, company, mustChangePassword, desktop, login, logout, refresh, expiredMessage,
+      status, user, company, mustChangePassword, desktop, access, directSession, login, logout, refresh, expiredMessage,
       can: (...p) => p.every((x) => perms.has(x)),
       canAny: (...p) => p.some((x) => perms.has(x)),
     };
-  }, [status, user, company, mustChangePassword, desktop, login, logout, refresh, expiredMessage]);
+  }, [status, user, company, mustChangePassword, desktop, access, directSession, login, logout, refresh, expiredMessage]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

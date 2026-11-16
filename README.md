@@ -12,14 +12,21 @@ negocio. Los datos se guardan localmente en SQLite; no requiere internet ni serv
 
 - **Inventario**: productos con precio, costo, IVA y existencia mínima; entradas (contado, crédito,
   inventario inicial), salidas, ajustes por conteo, costo promedio ponderado, historial por
-  movimiento, alertas de existencias bajas, importación con vista previa y exportación Excel/CSV.
+  movimiento, alertas de existencias bajas, importación con vista previa y exportación Excel/CSV, y
+  **observaciones de inventario** (faltantes, defectos, vencimientos, diferencias de conteo…) por
+  producto, con prioridad, estado, responsable, adjuntos e historial de seguimiento inmutable; no
+  alteran existencias ni movimientos.
 - **Ventas (POS)**: lectura de código, carrito, descuentos con permiso y límite, pagos combinados,
   venta a crédito, anulaciones y devoluciones parciales con reingreso al inventario.
 - **Documentos**: tipos configurables (cotizaciones, órdenes, etc.) generados sobre la plantilla de
   Excel original, con vista previa, descarga, reimpresión y paso a venta.
 - **Finanzas**: partida doble automática, libro diario y mayor, balance de prueba, balance general,
-  flujo de caja, punto de equilibrio, cuentas por cobrar y por pagar, conciliación bancaria.
-- **Gestión**: usuarios (administrador o empleado con permisos asignables), clientes, proveedores,
+  flujo de caja, punto de equilibrio, cuentas por cobrar y por pagar, conciliación bancaria, e
+  **informes de ingresos** por día, semana, mes, año o periodo personalizado (cierres habituales o
+  anticipados, ventas registradas vs. dinero recibido, historial con revisiones, PDF y Excel).
+- **Gestión**: empleados (con o sin cuenta de acceso) y administradores con permisos asignables,
+  tareas asignadas a cada empleado, clientes, proveedores (expediente por proveedor: contacto,
+  asesor, notas y pendientes, visitas, cotizaciones y lista de productos en Excel con versiones),
   categorías, métodos de pago, empresa, copias de seguridad con verificación y restauración,
   historial de actividad.
 - **Integraciones**: sincronización de inventario desde OneDrive, Google Drive o una carpeta de red.
@@ -57,11 +64,21 @@ plantillas con imágenes o gráficos) y el controlador de la impresora térmica.
    - `POS-PY_<versión>_x64_es-ES.msi`: para despliegue corporativo.
 
    Si falta WebView2, el instalador lo descarga. No hace falta instalar Python.
-2. Abra POS-PY y cree el usuario administrador. En el escritorio el código de instalación se
-   completa automáticamente.
-3. Configure la empresa, el IVA, la impresión y los usuarios en **Gestión**.
+2. Abra POS-PY: se muestra el **asistente de configuración inicial**, sin pedir cuenta (en el
+   escritorio el código de instalación se completa solo). Pasos: empresa, preferencias, seguridad,
+   empleados y finalizar. Si cierra la aplicación a mitad, continúa en el último paso.
+3. En el paso **Seguridad** decida si activa el **inicio de sesión**. Para activarlo debe asignar
+   antes una contraseña a la cuenta administrativa. Puede cambiarlo cuando quiera en
+   *Gestión › Sesiones y seguridad*; desactivarlo no borra cuentas, contraseñas, empleados ni permisos.
+   - **Activado**: cada persona ingresa con usuario y contraseña.
+   - **Desactivado** (acceso directo): en el propio equipo cada persona elige su perfil y trabaja con
+     sus permisos; los administradores con contraseña la siguen necesitando. Desde otros equipos de
+     la red siempre se pide contraseña.
 
-**Datos**: `%APPDATA%\com.pospy.app\data`. Desinstalar no los borra.
+**Datos**: `%APPDATA%\com.pospy.app\data`. Desinstalar no los borra. Los archivos de proveedores
+(listas de productos y adjuntos de cotizaciones) están en la subcarpeta `proveedores\` y los adjuntos
+de las observaciones de inventario en `observaciones\`. Las copias de *Gestión › Copias de seguridad*
+solo incluyen la base de datos: copie también esas carpetas.
 
 **Actualizar**: cree una copia en *Gestión › Copias de seguridad* e instale la versión nueva encima
 de la anterior. Las migraciones se aplican al arrancar.
@@ -110,13 +127,16 @@ cd ..\backend; .venv\Scripts\python.exe -m pospy  # http://127.0.0.1:8000
 
 `python -m pospy` acepta `--host`, `--port`, `--data-dir` y `--web-dist`, equivalentes a las variables de entorno.
 
-### Primer administrador
+### Configuración inicial
 
 No hay usuarios por defecto ni registro público.
 
-1. Al arrancar sin usuarios, el backend crea un código de un solo uso en
-   `<carpeta de datos>\setup-code.txt`.
-2. Abra la aplicación **desde el mismo equipo**, escriba el código y cree el administrador.
+1. Mientras la configuración inicial no termine, el backend guarda un código de un solo uso en
+   `<carpeta de datos>\setup-code.txt` (se borra al finalizar el asistente).
+2. Abra la aplicación **desde el mismo equipo** y escriba el código: se abre el asistente con un
+   perfil de administrador sin contraseña. La contraseña se asigna en el paso *Seguridad*.
+
+Las instalaciones anteriores conservan el inicio de sesión obligatorio al actualizar (migración 3).
 
 Herramientas de consola (desde `backend/`):
 
@@ -237,6 +257,11 @@ openpyxl no las conserva.
 
 - Los permisos se validan en el backend en cada operación; la interfaz solo oculta lo no autorizado.
 - La instalación inicial exige el código de un solo uso y solo se acepta desde el propio equipo.
+- Con el inicio de sesión desactivado, el acceso directo solo funciona desde el propio equipo, los
+  empleados actúan con sus permisos y no pueden cambiar la configuración de seguridad (validado en
+  el backend). Un administrador **sin** contraseña sí queda accesible para cualquiera en ese equipo:
+  asígnele una. Es una protección local, no equivalente a una autenticación de servidor.
+- Contraseñas con hash scrypt (sal aleatoria por contraseña; nunca en texto plano ni en el navegador).
   Detrás de un proxy inverso local todas las peticiones parecen locales: cree el administrador antes de publicar.
 - Auditoría inmutable que excluye contraseñas, tokens y secretos.
 - Las copias de seguridad contienen datos del negocio: guárdelas en un medio con acceso restringido.

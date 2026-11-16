@@ -1,5 +1,6 @@
 # Datos del negocio, secretos y credenciales: nunca al repositorio
 backend/data/
+backend/data-respaldo-*/
 data/
 *.db
 *.db-wal

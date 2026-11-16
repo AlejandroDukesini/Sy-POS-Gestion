@@ -10,7 +10,18 @@ from ...core.audit import record
 from ...core.errors import DomainError, NotFoundError, ValidationError
 from ...core.settings import Settings
 from ..deps import actor, ctx
-from ..models import Connection, GoogleSecret, PasswordReset, PaymentMethod, Restore, UserCreate, UserUpdate
+from ..models import (
+    Connection,
+    GoogleSecret,
+    LoginToggle,
+    PasswordReset,
+    PaymentMethod,
+    Restore,
+    TaskIn,
+    TaskUpdate,
+    UserCreate,
+    UserUpdate,
+)
 from ..serialize import out
 
 router = APIRouter(tags=["gestión"])
@@ -43,6 +54,39 @@ def reset_password(user_id: int, body: PasswordReset, current: Actor = Depends(a
 def unlock(user_id: int, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
     app.users.unlock(current, user_id)
     return {"ok": True}
+
+
+# ------------------------------------------------------------------ tareas de empleados
+@router.get("/tasks")
+def tasks(assignee_id: int | None = None, status: str = "", current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    return app.tasks.list(current, assignee_id, status)
+
+
+@router.get("/tasks/assignees")
+def task_assignees(current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    return app.tasks.assignees(current)
+
+
+@router.post("/tasks")
+def create_task(body: TaskIn, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    return app.tasks.create(current, body.data())
+
+
+@router.put("/tasks/{task_id}")
+def update_task(task_id: int, body: TaskUpdate, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    return app.tasks.update(current, task_id, body.data())
+
+
+# ------------------------------------------------------------------ seguridad (inicio de sesión)
+@router.get("/security")
+def security(current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    return {**app.access.summary(current), "session": app.settings.get("seguridad")}
+
+
+@router.put("/security/login")
+def toggle_login(body: LoginToggle, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    app.access.set_login(current, body.enabled)
+    return {**app.access.summary(current), "session": app.settings.get("seguridad")}
 
 
 # ------------------------------------------------------------------ configuración

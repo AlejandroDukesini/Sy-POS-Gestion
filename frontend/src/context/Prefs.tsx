@@ -21,8 +21,14 @@ export function PrefsProvider({ children }: { children: ReactNode }) {
     if (status !== 'authenticated') return;
     get('/prefs').then((p) => {
       const value = normalize(p);
-      setSaved(value);
-      setDraft(value);
+      setSaved((old) => {
+        // Si la persona ya empezó a cambiar algo (vista previa) antes de que llegara la respuesta, se conserva.
+        setDraft((d) => {
+          const edited = Object.fromEntries(Object.entries(d).filter(([k, v]) => v !== old[k as keyof Prefs]));
+          return { ...value, ...edited };
+        });
+        return value;
+      });
       storeLocal(value);
     }).catch(() => { /* sin conexión: se usan las preferencias locales */ });
   }, [status]);

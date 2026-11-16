@@ -8,18 +8,23 @@ from .config import Config
 from .core.secrets_store import SecretStore
 from .core.settings import Settings
 from .db import Database
+from .services.access import AccessService
 from .services.auth import AuthService
 from .services.backup import BackupService
 from .services.catalog import CatalogService
 from .services.documents import DocumentService
 from .services.finance import FinanceService
+from .services.financial_reports import FinancialReportService
 from .services.inventory import InventoryService
+from .services.observations import ObservationService
 from .services.open_items import AP, AR, OpenItems
 from .services.prefs import PrefsService
 from .services.printing import PrintingService
 from .services.reports import ReportService
 from .services.sales import SalesService
+from .services.suppliers import SupplierService
 from .services.sync import SyncService
+from .services.tasks import TaskService
 from .services.users import UserService
 
 log = logging.getLogger("pospy")
@@ -33,11 +38,15 @@ class AppContext:
         self.db.migrate()
         self.settings = Settings(self.db)
         self.secrets = SecretStore(self.db, config.data_dir, config.master_key)
-        self.auth = AuthService(self.db, self.settings, config.data_dir, config.setup_code)
+        self.access = AccessService(self.db)
+        self.auth = AuthService(self.db, self.settings, config.data_dir, config.setup_code, self.access)
         self.users = UserService(self.db)
+        self.tasks = TaskService(self.db)
+        self.suppliers = SupplierService(self.db, self.settings, config.data_dir)
         self.prefs = PrefsService(self.db)
         self.catalog = CatalogService(self.db)
         self.inventory = InventoryService(self.db, self.settings)
+        self.observations = ObservationService(self.db, self.settings, config.data_dir)
         self.sales = SalesService(self.db, self.settings, self.inventory)
         self.printing = PrintingService(self.db, self.settings, self.sales)
         self.documents = DocumentService(self.db, self.settings, config, self.printing)
@@ -45,6 +54,7 @@ class AppContext:
         self.payables = OpenItems(self.db, self.settings, AP)
         self.finance = FinanceService(self.db, self.settings)
         self.reports = ReportService(self.db, self.settings)
+        self.financial_reports = FinancialReportService(self.db, self.settings)
         self.backups = BackupService(self.db, self.settings, config.backups_dir)
         self.sync = SyncService(self.db, self.settings, self.secrets, self.inventory, config.imports_dir)
         self.auth.prepare_setup()

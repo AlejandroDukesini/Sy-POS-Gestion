@@ -22,9 +22,9 @@ export function LogoPanel() {
   );
 }
 
-export function LoginPage() {
+export function LoginPage({ initialUsername = '', onBack, notice }: { initialUsername?: string; onBack?: () => void; notice?: string } = {}) {
   const { login, expiredMessage } = useAuth();
-  const [username, setUsername] = useState('');
+  const [username, setUsername] = useState(initialUsername);
   const [password, setPassword] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<ApiError | null>(null);
@@ -57,16 +57,18 @@ export function LoginPage() {
             <h1>Iniciar sesión</h1>
             <p className="muted" style={{ marginTop: 6 }}>Escriba el usuario y la contraseña que le asignó el administrador.</p>
           </div>
+          {notice && <Alert kind="info">{notice}</Alert>}
           {expiredMessage && <Alert kind="info">{expiredMessage}</Alert>}
           <ErrorAlert error={error} title="No se pudo iniciar sesión" />
           <form className="stack" onSubmit={submit} noValidate>
             <TextField label="Usuario" value={username} onChange={setUsername} error={errors.username} autoComplete="username"
-              autoCapitalize="none" spellCheck={false} required autoFocus />
+              autoCapitalize="none" spellCheck={false} required autoFocus={!initialUsername} />
             <TextField label="Contraseña" type="password" value={password} onChange={setPassword} error={errors.password}
-              autoComplete="current-password" required />
+              autoComplete="current-password" required autoFocus={Boolean(initialUsername)} />
             <Button type="submit" variant="primary" size="lg" block busy={busy} icon={<LogIn size={22} />}>Ingresar</Button>
           </form>
           <p className="muted">¿Olvidó su contraseña? Pida a un administrador que la restablezca.</p>
+          {onBack && <Button variant="ghost" onClick={onBack}>Volver a la lista de perfiles</Button>}
         </div>
       </main>
       <LogoPanel />

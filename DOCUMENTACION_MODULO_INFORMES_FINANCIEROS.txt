@@ -1,0 +1,336 @@
+POS-PYTHON (POS-PY) — MÓDULO DE INFORMES FINANCIEROS (Finanzas › Informes de ingresos)
+=====================================================================================
+Fecha: 12/11/2026
+
+Este documento describe lo que se implementó y verificó. Lo que no se verificó o tiene límites está
+indicado en la sección 11.
+
+
+1. ARQUITECTURA IMPLEMENTADA
+----------------------------
+Se amplió el módulo Finanzas existente sin reconstruir nada. Los cálculos solo LEEN los registros
+originales del POS; ninguna ruta de este módulo escribe en ventas, pagos, devoluciones, cartera,
+asientos, caja ni inventario.
+
+Backend (FastAPI + SQLite):
+  backend/pospy/services/financial_reports.py   Servicio FinancialReportService
+      presets()        accesos rápidos con fechas calculadas en la zona horaria de la empresa
+      _period()        valida el intervalo y clasifica el cierre (habitual / anticipado / personalizado)
+      _figures()       cálculo a partir de sales, sale_payments, sale_returns, receivable_payments,
+                       journal_entries / journal_lines (solo SELECT)
+      _build()         actividad, mejor y peor día, comparación con el periodo anterior equivalente
+      preview()        genera el informe sin guardarlo
+      save()           guarda una instantánea inmutable (idempotente, detecta mismo periodo)
+      list()/detail()  historial y detalle (detail compara con los datos actuales)
+      revise()         genera una revisión nueva cuando cambiaron las operaciones del periodo
+      add_note/update_note/delete_note   observaciones del administrador
+      export()         PDF o Excel
+  backend/pospy/documents/report_export.py      tablas comunes y generación de PDF / Excel (openpyxl)
+  backend/pospy/documents/simple_pdf.py         escritor PDF 1.4 mínimo sin dependencias nuevas
+  backend/pospy/api/routes/financial_reports.py rutas /api/finance/reports…
+  backend/pospy/migrations/v005_financial_reports.py
+
+  Rutas de la API:
+    GET    /api/finance/reports/presets
+    POST   /api/finance/reports/preview              {kind, date_from, date_to}
+    GET    /api/finance/reports?kind=&date_from=&date_to=&q=&include_replaced=
+    POST   /api/finance/reports                      (cabecera Idempotency-Key) {kind, date_from, date_to,
+                                                     name?, notes?, allow_same_period?}
+    GET    /api/finance/reports/{id}
+    POST   /api/finance/reports/{id}/revise          {reason}
+    POST   /api/finance/reports/{id}/notes           {category, body, amount?}
+    PUT    /api/finance/reports/{id}/notes/{nid}     {category, body, amount?, version}
+    DELETE /api/finance/reports/{id}/notes/{nid}
+    GET    /api/finance/reports/{id}/export/pdf | /xlsx
+
+  Permisos (validados en el servidor en cada operación):
+    finanzas.ver       consultar, generar vistas previas, abrir el historial y exportar
+    finanzas.cierres   (NUEVO) guardar informes, generar revisiones y gestionar observaciones.
+                       El administrador lo tiene; a un empleado se le puede asignar en Gestión.
+
+Frontend (React):
+  frontend/src/pages/finance/IncomeReports.tsx
+      /finanzas/informes        accesos rápidos, generación personalizada, vista previa, guardado
+                                e historial con filtros
+      /finanzas/informes/{id}   informe guardado: cifras, gráficos, observaciones, versiones,
+                                exportación PDF/Excel e impresión (window.print con estilos de impresión)
+  Nueva tarjeta «INF · Informes de ingresos» en Finanzas.
+  Ajuste «Primer día de la semana» en Gestión › Ventas e inventario › Informes financieros.
+
+
+2. FUNCIONAMIENTO DEL MÓDULO
+---------------------------
+a) Accesos rápidos: Ayer, Hoy, Semana actual, Semana pasada, Mes actual, Mes pasado, Año actual y
+   Año pasado. El servidor calcula las fechas (zona horaria de la empresa y primer día de semana
+   configurado). Al pulsar uno se muestra la vista previa.
+b) Generación personalizada: tipo (diario, semanal, mensual, anual o personalizado), fecha inicial y
+   final. El nombre y las observaciones se escriben al guardar (son opcionales; se propone un nombre).
+c) Reglas de validación del intervalo:
+     - Fechas en formato AAAA-MM-DD; inicial ≤ final; sin fechas futuras; desde el año 2000; máximo 1.100 días.
+     - Diario: un solo día.
+     - Semanal: empieza el primer día de semana configurado y termina a más tardar 6 días después.
+     - Mensual: empieza el día 1 y termina dentro del mismo mes.
+     - Anual: empieza el 1 de enero y termina dentro del mismo año.
+     - Personalizado: cualquier intervalo válido.
+   El intervalo elegido manda: el informe cubre exactamente esas fechas.
+d) Contenido del informe:
+     - Ventas registradas: bruto, descuentos, ventas registradas, devoluciones, ventas netas, parte a
+       crédito, IVA incluido, otros ingresos registrados.
+     - Dinero efectivamente recibido: cobrado en ventas, cobros de cartera, otros ingresos recibidos,
+       reembolsos pagados y total recibido.
+     - Desglose por método de pago (ventas, cobros, reembolsos y neto) y por tipo (efectivo,
+       transferencias, tarjetas, otros medios, otros ingresos).
+     - Actividad: cantidad de ventas, ticket promedio, días con y sin movimientos, día con mayores y
+       con menores ingresos (el de menores solo si hay al menos dos días con movimientos).
+     - Comparación con el periodo anterior equivalente (ventas netas, total recibido y cantidad de
+       ventas, con diferencia y variación %; sin % si el periodo anterior es cero).
+     - Detalle por día (solo días con movimientos), otros ingresos (asientos) y verificación con el
+       libro de caja y bancos.
+     - Observaciones del administrador.
+e) Gráficos: ingresos recibidos agrupables por día, semana o mes, y distribución por método de pago.
+   Usan los mismos datos del informe, respetan su intervalo y no rellenan periodos sin movimientos.
+   Son barras horizontales con etiqueta y valor visibles (no dependen solo del color), y las tablas
+   de detalle sirven de vista accesible.
+
+
+3. FÓRMULAS UTILIZADAS
+----------------------
+Todos los importes se manejan como enteros en centavos (sin decimales de coma flotante).
+Periodo [inicio, fin] inclusive.
+
+  Ventas del periodo = ventas con status 'completada' y sale_date en el periodo (las anuladas no suman;
+  se informan aparte como «ventas anuladas»).
+
+  Ingresos brutos por ventas  = Σ sales.gross_cents          (precio de lista, IVA incluido si aplica)
+  Descuentos aplicados        = Σ sales.discount_cents
+  Ventas registradas          = Σ sales.total_cents          (= bruto − descuentos)
+  Devoluciones                = Σ sale_returns.total_cents   con return_date en el periodo
+  Ingresos netos por ventas   = Ventas registradas − Devoluciones
+  Parte a crédito             = Σ sales.credit_cents
+  IVA incluido (neto)         = Σ sales.tax_cents − Σ sale_returns.tax_cents
+
+  Cobrado en ventas           = Σ sale_payments.amount_cents de esas ventas con métodos ≠ crédito
+  Cobros de cartera           = Σ receivable_payments.amount_cents no anulados, payment_date en el periodo
+  Reembolsos pagados          = Σ sale_returns.refund_cents con return_date en el periodo
+  Otros ingresos registrados  = Σ (créditos − débitos) en cuentas de tipo ingreso distintas de 4135
+                                (ventas) y 4175 (devoluciones), en asientos del periodo que no son de
+                                venta, devolución ni cobro
+  Otros ingresos recibidos    = por asiento: min(ingreso, entrada a caja/bancos) si ambos son positivos
+                                (o el reverso equivalente si ambos son negativos); 0 si el asiento no
+                                mueve caja ni bancos
+  TOTAL DE INGRESOS RECIBIDOS = Cobrado en ventas + Cobros de cartera + Otros ingresos recibidos
+                                − Reembolsos pagados
+
+  Neto por método             = ventas + cobros − reembolsos de ese método
+  Ticket promedio             = Ventas registradas / cantidad de ventas (redondeado al centavo)
+  Recibido por día            = mismo total, agrupado por la fecha de cada operación
+  Variación %                 = (actual − anterior) / |anterior| × 100, con un decimal
+
+  Periodo anterior equivalente:
+    diario   el día anterior
+    semanal  los mismos días de la semana anterior (lunes–viernes → lunes–viernes anterior)
+    mensual  el mismo tramo del mes anterior (mes completo → mes anterior completo)
+    anual    el mismo tramo del año anterior
+    personalizado  el mismo número de días inmediatamente antes
+
+  Verificación con el libro: Σ (débito − crédito) de cuentas de caja y bancos (is_cash = 1) en
+  asientos de venta, devolución y cobro del periodo, comparado con
+  (cobrado en ventas + cobros − reembolsos). La diferencia se muestra; no se oculta ni se ajusta.
+
+
+4. DIFERENCIA ENTRE VENTAS E INGRESOS RECIBIDOS
+-----------------------------------------------
+- «Ventas registradas» es lo que se vendió (fecha de la venta), se haya cobrado o no.
+- «Dinero recibido» es lo que efectivamente entró a caja o bancos en el periodo.
+- Venta a crédito: suma en ventas registradas el día de la venta, pero no en dinero recibido. Cuando
+  el cliente paga, el cobro suma en dinero recibido el día del cobro (no se vuelve a contar como venta).
+- Venta parcialmente a crédito: la parte pagada suma como recibida; la parte a crédito se muestra
+  aparte («De las ventas, a crédito») y entrará como cobro de cartera cuando se pague.
+- Venta con varios métodos de pago: cada pago es una fila distinta y se suma una sola vez; el total de
+  pagos de una venta es igual a su total (el sistema lo exige al vender).
+- Cambio entregado: no se suma. Se registra el importe aplicado a la venta, no el billete recibido.
+- Devoluciones: restan en ventas netas el día de la devolución. Si hubo reembolso, resta del dinero
+  recibido en el método usado para reembolsar. Si la devolución redujo una cuenta por cobrar, no hubo
+  salida de dinero y no resta del dinero recibido.
+- Anulaciones: una venta anulada deja de contar en su fecha. Si se anula otro día, el libro de caja
+  registra el reverso el día de la anulación; esa diferencia aparece en la verificación con el libro.
+- Los informes guardados no son ventas ni ingresos: están en tablas propias y nada del POS los lee
+  como transacciones.
+
+
+5. CONFIGURACIÓN DEL CALENDARIO SEMANAL
+--------------------------------------
+Gestión › Ventas e inventario › «Informes financieros» › «Primer día de la semana del negocio».
+Valor predeterminado: lunes (semana de lunes a domingo, cierre habitual el domingo). Se puede elegir
+cualquier día; el cierre semanal habitual es el día anterior. Afecta a los accesos rápidos «Semana
+actual» y «Semana pasada», a la validación del tipo semanal y a la agrupación por semana del gráfico.
+Cada informe guarda el inicio de semana con el que se generó, así que cambiar el ajuste no altera
+informes ya guardados.
+
+
+6. PROCEDIMIENTO PARA CIERRES ANTICIPADOS
+-----------------------------------------
+Ejemplo: el cierre habitual es el domingo y se necesita cerrar el viernes.
+  1. Finanzas › Informes de ingresos › «Generar un informe».
+  2. Tipo «Semanal», fecha inicial el lunes, fecha final el viernes (o pulsar «Semana actual» si hoy
+     es viernes).
+  3. «Generar informe». La vista previa muestra «Cierre anticipado: cubre 5 de 7 días del periodo
+     semanal (que termina el domingo …). No es un periodo completo.»
+  4. Escribir observaciones (opcional) y «Guardar informe».
+El informe queda identificado con: fecha inicial, fecha final, días cubiertos sobre días del periodo,
+fecha y hora de generación, tipo de cierre («Cierre anticipado»), usuario que lo generó, número
+(INF-00001…) y revisión. El nombre propuesto también lo indica, por ejemplo: «Informe semanal del 9 de
+noviembre de 2026 al 15 de noviembre de 2026 (cierre anticipado al 13 de noviembre de 2026)».
+Lo mismo aplica a meses y años que terminan antes de su último día. Los periodos pasados se generan
+igual, eligiendo sus fechas. Si el periodo incluye el día de hoy, el informe avisa que las operaciones
+posteriores a su generación no están incluidas.
+
+
+7. FUNCIONAMIENTO DEL HISTORIAL
+-------------------------------
+- Lista: número, nombre (con avisos de revisión, reemplazado y «mismo periodo que otro cierre»), tipo,
+  periodo, cierre, fecha de generación, total recibido y cantidad de observaciones.
+- Filtros: búsqueda por nombre o número, tipo, periodo desde/hasta (muestra informes cuyo periodo se
+  cruza con esas fechas) e «incluir versiones reemplazadas».
+- Abrir un informe muestra sus cifras guardadas, gráficos, observaciones y botones PDF, Excel e Imprimir.
+- Duplicados accidentales: el guardado es idempotente (doble clic o reintento no crea dos informes).
+  Si ya existe un informe vigente con las mismas fechas, el servidor responde 409 y la pantalla pide
+  confirmar «Guardar como cierre independiente»; ambos quedan con su número y hora y se enlazan entre sí.
+- Trazabilidad: las cifras guardadas no se pueden modificar ni borrar (triggers en la base). Al abrir un
+  informe se recalcula con los datos actuales: si difieren, se avisa qué cambió (guardado → actual) y se
+  ofrece «Generar revisión», que exige un motivo, crea la revisión N+1 (copiando las observaciones y
+  agregando una aclaración con el motivo) y deja la anterior como «reemplazada» con sus cifras originales.
+  Cada informe guarda la huella SHA-256 de sus cifras.
+- Observaciones: categorías general, incidencia, diferencia de caja, aclaración sobre ingresos y
+  situación extraordinaria, con importe informativo opcional. Se crean, editan (con control de versión)
+  y eliminan con confirmación; todo queda en el historial de actividad, incluido el texto eliminado.
+  Una versión reemplazada no admite cambios en sus observaciones.
+
+
+8. EXPORTACIÓN PDF Y EXCEL
+--------------------------
+Ambos se generan desde la instantánea guardada (coinciden con lo que se ve en pantalla).
+- PDF (A4): nombre del negocio, NIT y ciudad, título, aviso de cierre anticipado, identificación del
+  cierre (número, revisión, periodo, días cubiertos, tipo, tipo de cierre, generado, generado por,
+  estado, huella), ventas registradas, dinero recibido, desglose por método, actividad, comparación,
+  detalle por día, otros ingresos, verificación con el libro, observaciones y explicación del cálculo.
+  Pie con número de página. Se usa un escritor PDF propio (Helvetica, codificación WinAnsi para tildes
+  y ñ) porque el proyecto no tenía biblioteca de PDF; no se agregaron dependencias.
+- Excel (.xlsx, con openpyxl, ya usado por el proyecto): hojas «Resumen», «Detalle de ingresos»,
+  «Métodos de pago» y «Observaciones». Los importes son números con formato de moneda. Un texto
+  escrito por una persona que empiece por «=» se guarda como texto, nunca como fórmula.
+- Imprimir: botón que usa la impresión del navegador; menú, barra lateral y botones no se imprimen.
+
+
+9. MIGRACIONES
+--------------
+v005_financial_reports (versión 5 del esquema):
+  - financial_reports: número, clave de idempotencia, nombre, tipo, cierre, fechas, días, días del
+    periodo, en curso, inicio de semana, instantánea JSON, huella, totales para el historial, estado
+    (vigente/reemplazado), revisión, raíz, anterior, reemplazado por, generado por y cuándo.
+    Triggers: no se eliminan; sus cifras, fechas, tipo, número y revisión no se modifican.
+  - financial_report_notes: observaciones (categoría, texto, importe opcional, autor, fechas, versión).
+  - Secuencia «informe» (INF-00001…).
+  Solo crea tablas nuevas; no altera tablas existentes. Incluye DOWN_SQL para revertir.
+Verificación sobre COPIAS de las bases reales (no se tocaron los originales):
+  - backend/data/pospy.db: versión 4 → 5; todas las tablas existentes idénticas fila por fila;
+    su venta real (1 venta en efectivo, $ 360) aparece en el informe con diferencia 0 frente al libro.
+  - backend/data-respaldo-20261112-111903/pospy.db: versión 2 → 5 sin errores.
+La base real se actualiza sola la próxima vez que se inicie el servidor.
+
+
+10. PRUEBAS EJECUTADAS Y RESULTADOS
+-----------------------------------
+backend/tests/test_financial_reports.py — 13 pruebas, todas pasan. Escenario con fecha simulada
+(hoy = viernes 13/11/2026): venta de contado en octubre, venta con efectivo + transferencia y cambio,
+venta a crédito, venta de contado devuelta al día siguiente, cobro de cartera, otro ingreso por asiento
+y una venta anulada.
+  [x] Informe de ayer                       test_daily_reports_yesterday_and_today
+  [x] Informe de hoy                        test_daily_reports_yesterday_and_today
+  [x] Semana actual / semana pasada         test_presets_compute_ranges, test_empty_periods
+  [x] Mes actual / mes pasado               test_month_year_custom_and_comparison
+  [x] Año actual / año pasado               test_month_year_custom_and_comparison, test_empty_periods
+  [x] Informe personalizado                 test_month_year_custom_and_comparison (cruza el cambio de mes)
+  [x] Semanal anticipado lunes a viernes    test_period_validation_and_closure_type, test_week_breakdown…
+  [x] Ingresos brutos y netos               test_week_breakdown_without_double_counting
+  [x] Descuentos                            ídem (bruto 80.000, descuentos 8.000)
+  [x] Devoluciones                          ídem y test_daily_reports… (cuentan el día de la devolución)
+  [x] Desglose por métodos de pago          ídem (efectivo neto 20.000, transferencia 26.000, otros 5.000)
+  [x] Sin pagos duplicados                  ídem (venta con dos métodos y cambio: 36.000, no 50.000 ni 72.000)
+  [x] Guardado del informe                  test_save_history_duplicates_and_persistence
+  [x] Consulta del historial y filtros      ídem
+  [x] Exportación PDF                       test_export_pdf_and_excel (estructura xref y texto verificados)
+  [x] Exportación Excel                     ídem (hojas, valores, texto «=…» no es fórmula)
+  [x] Persistencia después de reiniciar     ídem (segunda instancia sobre la misma carpeta de datos)
+  [x] Conservación de transacciones         huellas SHA-256 de 15 tablas antes y después de guardar,
+                                            revisar y exportar: idénticas
+  [x] Periodos sin ventas                   test_empty_periods (sin ticket, sin mejor día, sin días ficticios)
+  [x] Fechas inválidas                      test_period_validation_and_closure_type (12 casos)
+  [x] Cambios de mes y de año               test_presets_compute_ranges (hoy = 1/1/2027), personalizado 30/10–9/11
+  [x] Revisiones y trazabilidad             test_revision_keeps_original_and_notes
+  [x] Observaciones y auditoría             test_notes_crud_and_audit
+  [x] Diferencia con el libro de caja       test_cash_difference_is_shown_not_hidden
+  [x] API y permisos                        test_api_flow_and_permissions
+  [x] Configuración del inicio de semana    test_presets_compute_ranges, test_settings_week_start_is_validated
+
+Resultados globales:
+  - Backend: 130 pruebas pasan (117 anteriores + 13 nuevas); ruff sin observaciones.
+  - Frontend: 58 pruebas de vitest pasan (nueva: acceso rápido → vista previa con cierre anticipado,
+    usando una respuesta real de la API como dato de prueba); TypeScript y ESLint sin errores.
+  - Extremo a extremo en Edge (e2e/smoke.mjs): nuevo paso 7b — informe de hoy con total $ 36.000,
+    guardado con observación, nueva observación de diferencia de caja, descarga de PDF (%PDF) y Excel
+    (xlsx) con los botones de la pantalla, aparición en el historial, ventas e inventario sin cambios;
+    y el informe en móvil sin desborde horizontal. 35 verificaciones, 3 ejecuciones seguidas sin fallos.
+  - PDF validado además con un lector externo (pypdf, modo estricto, instalado solo en una carpeta
+    temporal) y revisado visualmente en el visor de PDF de Edge.
+
+
+11. LIMITACIONES IDENTIFICADAS
+------------------------------
+- «Otros ingresos» solo existen si se registran como asientos contables que acreditan cuentas de
+  ingreso (o cuentas por cobrar manuales con cuenta de ingreso). El POS no tiene otra fuente.
+- Una anulación hecha en un día distinto al de la venta produce una diferencia visible entre el
+  cálculo y el libro de caja para esos días (se explica en pantalla; no se compensa automáticamente).
+- Los métodos de pago se agrupan por su tipo configurado (efectivo, tarjeta, transferencia, otro).
+  Un método mal clasificado aparece en el grupo que tenga asignado.
+- Los informes guardados no se eliminan (por trazabilidad). Un informe guardado por error queda en el
+  historial; puede aclararse con una observación.
+- El PDF usa las fuentes estándar Helvetica (no incrustadas). Caracteres fuera de WinAnsi (por ejemplo
+  emojis) se muestran como «?».
+- No hay generación automática programada (por ejemplo, cada domingo): los informes se generan a mano
+  con los accesos rápidos.
+- Prueba e2e: Edge abre por su cuenta una pestaña para mostrar los PDF y archivos de Office recién
+  descargados (también pasa con la lista de productos de proveedores). Bajo automatización esa pestaña
+  queda en blanco y, al cerrar el navegador, Playwright lanza un TargetClosedError interno. El script
+  ignora solo ese error, solo durante el cierre, y lo anuncia con una línea «AVISO»; las descargas se
+  verifican igualmente (nombre y contenido).
+- Las copias de seguridad incluyen estos informes (están en la base de datos).
+- La app de escritorio instalada no incluye este módulo hasta que se vuelva a compilar.
+
+
+ARCHIVOS CREADOS
+----------------
+  backend/pospy/migrations/v005_financial_reports.py
+  backend/pospy/services/financial_reports.py
+  backend/pospy/documents/report_export.py
+  backend/pospy/documents/simple_pdf.py
+  backend/pospy/api/routes/financial_reports.py
+  backend/tests/test_financial_reports.py
+  frontend/src/pages/finance/IncomeReports.tsx
+  frontend/src/test/fixtures/report-preview.json
+  DOCUMENTACION_MODULO_INFORMES_FINANCIEROS.txt
+
+ARCHIVOS MODIFICADOS
+--------------------
+  backend/pospy/migrations/__init__.py        registra la migración 5
+  backend/pospy/core/permissions.py           permiso finanzas.cierres
+  backend/pospy/core/settings.py              sección «informes» (primer día de la semana)
+  backend/pospy/api/models.py                 FinancialReportRequest, FinancialReportNote
+  backend/pospy/api/app.py                    registra las rutas (antes de /finance/{kind})
+  backend/pospy/context.py                    crea FinancialReportService
+  frontend/src/pages/finance/FinanceRoutes.tsx  tarjeta y ruta «Informes de ingresos»
+  frontend/src/pages/manage/ManageRoutes.tsx    ajuste de semana en Ventas e inventario
+  frontend/src/styles/components.css            estilos de accesos rápidos, barras y observaciones
+  frontend/src/test/screens.test.tsx            prueba de pantalla de informes
+  frontend/e2e/smoke.mjs                        paso 7b y comprobación en móvil
+  README.md                                     menciona los informes de ingresos
