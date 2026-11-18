@@ -11,7 +11,7 @@ from ...core.actor import Actor
 from ...core.errors import ValidationError
 from ...services.inventory import ENTRY_COUNTERPARTS, EXIT_COUNTERPARTS, UNITS
 from ..deps import actor, ctx, idempotency_key
-from ..models import Category, Movement, Product
+from ..models import Category, ColumnOrder, InventoryColumnIn, InventoryColumnUpdate, Movement, Product
 from ..serialize import out
 
 router = APIRouter(tags=["inventario"])
@@ -47,6 +47,43 @@ def products_meta(current: Actor = Depends(actor), app: AppContext = Depends(ctx
 def export(fmt: str = "xlsx", current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
     data, name, mime = app.inventory.export(current, "csv" if fmt == "csv" else "xlsx")
     return Response(data, media_type=mime, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+# ------------------------------------------------------------------ columnas del inventario
+@router.get("/inventory/columns")
+def columns(include_archived: bool = False, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    return app.inventory.columns.list(current, include_archived)
+
+
+@router.post("/inventory/columns")
+def create_column(body: InventoryColumnIn, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    return app.inventory.columns.create(current, body.data())
+
+
+@router.put("/inventory/columns/order")
+def order_columns(body: ColumnOrder, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    return app.inventory.columns.reorder(current, body.ids)
+
+
+@router.put("/inventory/columns/{column_id}")
+def update_column(column_id: int, body: InventoryColumnUpdate, dry_run: bool = False, current: Actor = Depends(actor),
+                  app: AppContext = Depends(ctx)):
+    return app.inventory.columns.update(current, column_id, body.data(), dry_run)
+
+
+@router.post("/inventory/columns/{column_id}/archive")
+def archive_column(column_id: int, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    return app.inventory.columns.set_active(current, column_id, False)
+
+
+@router.post("/inventory/columns/{column_id}/restore")
+def restore_column(column_id: int, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    return app.inventory.columns.set_active(current, column_id, True)
+
+
+@router.delete("/inventory/columns/{column_id}")
+def delete_column(column_id: int, dry_run: bool = False, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    return app.inventory.columns.delete(current, column_id, dry_run)
 
 
 @router.get("/products/{product_id}")

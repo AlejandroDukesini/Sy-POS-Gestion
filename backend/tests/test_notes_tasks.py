@@ -95,9 +95,11 @@ def test_5_to_11_assigned_task_lifecycle(ctx, admin, employee, other):
         ctx.tasks.delete(employee, task["id"])
     with pytest.raises(PermissionDenied):
         ctx.tasks.create(employee, {"title": "Para otro", "assignee_id": other.id})
-    with pytest.raises(ValidationError):                                          # solo tres estados
-        ctx.tasks.update(admin, task["id"], {"status": "cancelada"})
-    ctx.tasks.delete(admin, task["id"])                                           # el admin sí la elimina
+    with pytest.raises(ValidationError):                                          # con avance no se elimina:
+        ctx.tasks.delete(admin, task["id"])
+    assert ctx.tasks.update(admin, task["id"], {"status": "cancelada"})["status"] == "cancelada"   # se cancela
+    fresh = ctx.tasks.create(admin, {"title": "Sin avance", "assignee_id": employee.id})
+    ctx.tasks.delete(admin, fresh["id"])                                          # sin avance, el admin la elimina
     with ctx.db.read() as conn:
         assert conn.execute("SELECT COUNT(*) FROM audit_log WHERE action = 'tarea.eliminar'").fetchone()[0] == 1
 
@@ -168,6 +170,7 @@ def test_http_contract_for_both_roles(ctx, admin, employee, other):
     assert emp.post("/api/tasks", json={"title": "Para Dos", "assignee_id": other.id}).status_code == 403
     assert adm.get("/api/tasks").json()[0]["status"] == "en_curso"
     assert emp.delete(f"/api/tasks/{personal['id']}").status_code == 200
-    assert adm.delete(f"/api/tasks/{task['id']}").status_code == 200
+    assert adm.delete(f"/api/tasks/{task['id']}").status_code == 422            # tiene avance: se cancela
+    assert adm.put(f"/api/tasks/{task['id']}", json={"status": "cancelada"}).json()["status"] == "cancelada"
     anon = TestClient(app)
     assert anon.get("/api/notes").status_code == 401 and anon.get("/api/tasks").status_code == 401

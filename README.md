@@ -15,7 +15,10 @@ negocio. Los datos se guardan localmente en SQLite; no requiere internet ni serv
   movimiento, alertas de existencias bajas, importación con vista previa y exportación Excel/CSV, y
   **observaciones de inventario** (faltantes, defectos, vencimientos, diferencias de conteo…) por
   producto, con prioridad, estado, responsable, adjuntos e historial de seguimiento inmutable; no
-  alteran existencias ni movimientos.
+  alteran existencias ni movimientos. **Columnas personalizables**: la columna «Observaciones» viene
+  por defecto y el administrador agrega columnas propias (texto, número, fecha, sí/no, lista) antes
+  de importar un Excel o CSV o en cualquier momento («Administrar columnas»: editar con conversión
+  segura, ordenar, archivar o eliminar); se exportan con sus valores.
 - **Ventas (POS)**: lectura de código, carrito, descuentos con permiso y límite, pagos combinados,
   venta a crédito, anulaciones y devoluciones parciales con reingreso al inventario.
 - **Documentos**: tipos configurables (cotizaciones, órdenes, etc.) generados sobre la plantilla de
@@ -30,11 +33,14 @@ negocio. Los datos se guardan localmente en SQLite; no requiere internet ni serv
   categorías, métodos de pago, empresa, copias de seguridad con verificación y restauración,
   historial de actividad.
 - **Notas y tareas**: bloc de notas personal con búsqueda; tareas personales (privadas de cada
-  persona) y tareas que el administrador asigna a los empleados, con estados Pendiente, En progreso
-  y Completada. El administrador ve en vivo los cambios de estado.
+  persona) y tareas que el administrador asigna a uno o varios integrantes de sus grupos de trabajo
+  (o, sin grupo, a cualquier empleado), con prioridad, observaciones, estado individual de cada
+  responsable y estado general (Pendiente, En progreso, En revisión, Completada, Cancelada),
+  comentarios, solicitudes de cambio e historial. Los cambios se ven en vivo en todos los dispositivos.
 - **Grupos de trabajo**: el administrador crea grupos e invita empleados con un enlace (vigencia y
   cupo configurables, revocable, sin QR); cada empleado entra con su propia cuenta, desde cualquier
-  dispositivo y red. Integrantes, solicitudes y estado de conexión se actualizan en vivo.
+  dispositivo y red. Integrantes, solicitudes y estado de conexión se actualizan en vivo. Cada grupo
+  tiene su tablero de tareas.
 - **Integraciones**: sincronización de inventario desde OneDrive, Google Drive o una carpeta de red.
 - **Preferencias por usuario**: tema, tamaño de texto, densidad, alto contraste, animaciones reducidas.
 
@@ -207,6 +213,10 @@ Grupos de trabajo de extremo a extremo (servidor real, sesiones independientes, 
 
 Notas y tareas con navegador real (administrador y dos empleados, y reinicio real del servidor):
 `npm run build; node e2e/notes-tasks.mjs`.
+
+Columnas del inventario (importando un CSV real) y tareas de un grupo con varios responsables
+(administrador y tres empleados en navegadores separados, y reinicio real del servidor):
+`npm run build; node e2e/columns-group-tasks.mjs`.
 
 ### Compilar la aplicación de escritorio
 

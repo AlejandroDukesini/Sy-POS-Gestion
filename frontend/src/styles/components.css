@@ -226,3 +226,28 @@ label.btn.is-disabled { opacity: 0.55; pointer-events: none; }
 @media (max-width: 640px) {
   .obs-filters > :first-child { grid-column: auto; }
 }
+
+/* Tareas: filtros, responsables con su estado, historial */
+.filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: 12px; align-items: end; }
+.assignees { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 0.9375rem; }
+.assignees li { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-width: 0; }
+.assignees li > span { min-width: 0; overflow-wrap: anywhere; }
+.check-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); gap: 4px 16px; }
+.history { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.history li { border-left: 3px solid var(--border-strong); padding: 4px 0 4px 12px; overflow-wrap: anywhere; }
+.history li.history-request { border-left-color: var(--warning, #b45309); }
+
+/* Inventario: columnas adicionales */
+.cell-clip { display: block; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cell-clip-long { max-width: 320px; }
+.column-list { list-style: none; margin: 0; padding: 0; }
+.column-list > li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px 16px;
+  border-top: 1px solid var(--border); }
+.column-list > li:first-child { border-top: 0; }
+.column-list .column-main { flex: 1 1 240px; min-width: 0; }
+.column-list .column-main p { margin: 2px 0 0; color: var(--text-muted); font-size: 0.875rem; overflow-wrap: anywhere; }
+.column-list .column-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.column-list .is-archived { opacity: 0.75; }
+.custom-map { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px; align-items: end; }
+.new-column-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); gap: 12px; align-items: end;
+  padding: 12px; border: 1px dashed var(--border-strong); border-radius: var(--radius); }

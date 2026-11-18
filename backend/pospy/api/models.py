@@ -66,10 +66,17 @@ class InvitationIn(Strict):
     max_uses: int = Field(default=10, ge=1, le=500)
 
 
+Priority = Literal["baja", "media", "alta", "urgente"]
+
+
 class TaskIn(Strict):
     title: str = Field(max_length=200)
     description: str | None = Field(default="", max_length=2000)
-    assignee_id: int | None = None          # obligatorio en las asignadas; en las personales es quien la crea
+    notes: str | None = Field(default="", max_length=2000)                     # observaciones adicionales
+    assignee_id: int | None = None                  # un responsable (compatibilidad); en las personales, quien la crea
+    assignee_ids: list[int] | None = Field(default=None, max_length=50)          # uno o varios responsables
+    group: str | None = Field(default=None, max_length=20)                       # id público del grupo (opcional)
+    priority: Priority | None = None
     due_date: str | None = Field(default=None, max_length=10)
     personal: bool = False
 
@@ -77,10 +84,22 @@ class TaskIn(Strict):
 class TaskUpdate(Strict):
     title: str | None = Field(default=None, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
+    notes: str | None = Field(default=None, max_length=2000)
     assignee_id: int | None = None
+    assignee_ids: list[int] | None = Field(default=None, max_length=50)
+    priority: Priority | None = None
     due_date: str | None = Field(default=None, max_length=10)
-    status: Literal["pendiente", "en_curso", "completada", "cancelada"] | None = None   # cancelada: solo tareas antiguas
+    status: Literal["pendiente", "en_curso", "en_revision", "completada", "cancelada"] | None = None
     version: int | None = None
+
+
+class TaskProgress(Strict):
+    status: Literal["pendiente", "en_curso", "completada"]
+
+
+class TaskComment(Strict):
+    comment: str = Field(max_length=1000)
+    request_change: bool = False
 
 
 class NoteIn(Strict):
@@ -133,7 +152,35 @@ class Product(Strict):
     active: bool | None = None
     external_ref: str | None = Field(default=None, max_length=80)
     initial_stock: Num | None = None
+    custom: dict[str, str | int | float | bool | None] | None = None   # columnas adicionales: {id de columna: valor}
     version: int | None = None
+
+
+ColumnType = Literal["texto", "texto_largo", "entero", "decimal", "fecha", "si_no", "lista"]
+Scalar = str | int | float | bool | None
+
+
+class InventoryColumnIn(Strict):
+    name: str = Field(max_length=60)
+    data_type: ColumnType = "texto"
+    description: str | None = Field(default="", max_length=300)
+    required: bool = False
+    default_value: Scalar = None
+    options: list[str] | None = Field(default=None, max_length=50)
+
+
+class InventoryColumnUpdate(Strict):
+    name: str | None = Field(default=None, max_length=60)
+    data_type: ColumnType | None = None
+    description: str | None = Field(default=None, max_length=300)
+    required: bool | None = None
+    default_value: Scalar = None
+    options: list[str] | None = Field(default=None, max_length=50)
+    version: int | None = None
+
+
+class ColumnOrder(Strict):
+    ids: list[int] = Field(max_length=200)
 
 
 class Movement(Strict):

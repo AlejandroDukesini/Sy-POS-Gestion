@@ -1,0 +1,308 @@
+POS-PY — COLUMNAS PERSONALIZABLES DEL INVENTARIO Y TAREAS DE LOS GRUPOS DE TRABAJO
+Documentación técnica y de pruebas · 18-11-2026
+==========================================================================================
+Rutas relativas a la carpeta del proyecto (CRM-P-COMPANY).
+
+
+1. DIAGNÓSTICO INICIAL
+------------------------------------------------------------------------------------------
+Inventario
+- products tiene campos fijos: código, descripción, categoría, unidad, precios, costo, IVA,
+  existencia y mínimo. Ventas, compras, movimientos y contabilidad dependen de ellos.
+- La importación de Excel/CSV ya tenía vista previa guardada (sync_runs + huella SHA-256),
+  correspondencia de encabezados para los campos fijos y validación por fila. No admitía columnas
+  extra, no mostraba la muestra del archivo y no detectaba encabezados repetidos.
+- La exportación (Excel y CSV) solo tenía los campos fijos.
+- «Observaciones de inventario» ya existía, pero es otro módulo: novedades con seguimiento,
+  prioridad y adjuntos. No era una columna de texto libre del producto. Se dejó intacto.
+Tareas y grupos
+- Las tareas ya existían (Notas y tareas): un solo responsable (tasks.assignee_id), tres estados y
+  sin relación con los grupos.
+- Los grupos de trabajo (invitación por enlace, integrantes, tiempo real por SSE) ya existían.
+- El asistente de configuración inicial asigna tareas a empleados sin cuenta y sin grupo. Esa
+  función se conserva.
+Decisión: AMPLIAR los módulos existentes, sin crear módulos paralelos ni reconstruir nada.
+
+
+2. ARQUITECTURA IMPLEMENTADA
+------------------------------------------------------------------------------------------
+Inventario
+- Campos principales: siguen en products y no se pueden eliminar, renombrar ni mover.
+- Columnas adicionales: se definen en inventory_columns y sus valores van en
+  inventory_custom_values (un valor por producto y columna).
+- El servicio services/columns.py:
+  - valida y normaliza cada valor según su tipo;
+  - calcula el impacto de un cambio antes de aplicarlo (dry_run);
+  - permite convertir el tipo solo si TODOS los valores se pueden convertir.
+- InventoryService incorpora los valores en el listado, la ficha, la búsqueda, el alta, la edición
+  y la exportación. SyncService los incorpora en la importación.
+- Importación:
+  - la vista previa valida las columnas nuevas pero NO las crea;
+  - se crean al aplicar, dentro de la misma transacción;
+  - cancelar o descartar no deja rastro.
+- Una celda vacía nunca borra un valor existente: una importación incompleta no sobrescribe datos.
+Tareas
+- task_assignees guarda a cada responsable con su estado individual (pendiente / en progreso /
+  completada) y sus fechas.
+- tasks.status es el estado general. Se recalcula con el avance: pasa a «Completada» solo
+  cuando TODOS los responsables terminaron.
+- task_events guarda el historial: creación, ediciones, cambios de responsables y de estado,
+  avances, comentarios y solicitudes de cambio.
+- Tareas de un grupo: solo el administrador DUEÑO del grupo las crea y gestiona, y solo puede
+  asignarlas a integrantes activos. Si un integrante sale del grupo, deja de ver la tarea; el
+  administrador ve la marca «ya no está en el grupo».
+- Tareas sin grupo: siguen funcionando como antes, para los empleados del negocio sin cuenta.
+- Sincronización: reutiliza el canal en tiempo real existente (SSE, evento «tarea»). Lo recibe
+  cada responsable, quien creó la tarea y, al reasignar, también quien fue retirado.
+- Interfaz: un solo tablero de tareas (TaskBoard), reutilizado en tres lugares:
+  - Notas y tareas › Mis tareas;
+  - Notas y tareas › Tareas asignadas (para el empleado: «Asignadas a mí»);
+  - la página de cada grupo (administrador: «Tareas del grupo»; integrante: «Mis tareas en este
+    grupo»).
+  No hay menús nuevos.
+
+
+3. CAMBIOS DEL MODELO DE DATOS
+------------------------------------------------------------------------------------------
+inventory_columns
+  - Campos: id, name (único, sin distinguir mayúsculas), data_type, description, required,
+    default_value, options (JSON), position, is_system, active, created_at, updated_at,
+    created_by, updated_by y version.
+  - Tipos de dato: texto, texto_largo, entero, decimal, fecha, si_no y lista.
+  - Restricciones (CHECK): una columna obligatoria exige valor predeterminado.
+  - Un trigger impide borrar las columnas del sistema.
+inventory_custom_values
+  - Campos: product_id, column_id, value, updated_at y updated_by.
+  - Clave primaria (product_id, column_id): no puede haber duplicados.
+  - FK a products y a inventory_columns (ON DELETE CASCADE).
+  - Índice por columna.
+tasks (reconstruida, conserva los mismos id)
+  - Columnas nuevas: notes (observaciones), group_id (FK work_groups) y priority (baja, media,
+    alta, urgente).
+  - Estados: pendiente, en_curso, en_revision, completada y cancelada.
+  - assignee_id pasa a task_assignees.
+  - Restricción: una tarea personal no puede tener grupo.
+task_assignees
+  - Campos: task_id, user_id, status, assigned_at, started_at, completed_at y updated_at.
+  - Clave primaria (task_id, user_id); FK con CASCADE desde tasks.
+task_events
+  - Campos: task_id, user_id, kind, details (JSON), comment y created_at.
+  - Un trigger impide modificar el historial.
+Permiso nuevo: «inventario.columnas» (Administrar las columnas del inventario). Es exclusivo de los
+administradores. No hay roles nuevos.
+
+
+4. MIGRACIONES
+------------------------------------------------------------------------------------------
+v009_inventory_columns.py
+  - Crea las dos tablas de columnas y la columna del sistema «Observaciones».
+  - No toca products.
+v010_group_tasks.py
+  - Reconstruye tasks y copia todas las filas con su mismo id.
+  - Las tareas existentes quedan sin grupo, con prioridad media y su mismo estado.
+  - Pasa el responsable único a task_assignees, con un estado individual equivalente.
+  - Crea task_events.
+Las dos migraciones se aplican solas al arrancar, dentro de una transacción. Antes de actualizar,
+haga una copia de seguridad: la reversión manual consiste en restaurarla.
+
+
+5. ARCHIVOS
+------------------------------------------------------------------------------------------
+Creados
+  backend/pospy/migrations/v009_inventory_columns.py
+  backend/pospy/migrations/v010_group_tasks.py
+  backend/pospy/services/columns.py           Definición de columnas, validación por tipo, impacto
+  backend/tests/test_inventory_columns.py     Escenarios del inventario (1 a 11) + permisos
+  backend/tests/test_group_tasks.py           Escenarios de tareas (1 a 10) por servicio y HTTP
+  frontend/src/pages/inventory/Columns.tsx    «Administrar columnas», campo y valor por tipo
+  frontend/src/pages/tasks/TaskBoard.tsx      Tablero, tarjetas, diálogo de asignación y detalle
+  frontend/src/test/inventory-columns.test.tsx
+  frontend/e2e/columns-group-tasks.mjs        Navegador real, 4 sesiones, CSV real, reinicio
+  DOCUMENTACION_COLUMNAS_INVENTARIO_Y_TAREAS_DE_GRUPO.txt
+Modificados
+  backend/pospy/services/inventory.py   Valores adicionales en listado, ficha, búsqueda, alta,
+                                        edición y exportación
+  backend/pospy/services/sync.py        Columnas existentes y nuevas en la importación
+  backend/pospy/integrations/tabular.py Encabezados repetidos, columna asignada dos veces
+  backend/pospy/services/tasks.py       Varios responsables, grupos, prioridad, avance, comentarios
+  backend/pospy/api/models.py           Product.custom, modelos de columnas, TaskIn/TaskUpdate
+  backend/pospy/api/routes/inventory.py /api/inventory/columns…
+  backend/pospy/api/routes/admin.py     /api/tasks/{id}, /mine, /comments, /groups y filtros
+  backend/pospy/core/permissions.py     inventario.columnas
+  backend/pospy/migrations/__init__.py
+  backend/tests/test_access.py, test_notes_tasks.py   Adaptados a las reglas nuevas
+  frontend/src/pages/inventory/InventoryPage.tsx  Columnas en la tabla y la ficha
+                                        Corrección: la ficha ahora se actualiza al guardar
+  frontend/src/pages/inventory/ProductForm.tsx    Sección «Información adicional»
+  frontend/src/pages/inventory/ImportExport.tsx   Muestra del archivo, columnas adicionales y nuevas
+  frontend/src/pages/tasks/TasksPage.tsx          Usa TaskBoard
+                                        Corrección: cada pestaña conserva sus propios filtros
+  frontend/src/pages/groups/GroupsPage.tsx        Tareas en la página del grupo
+  frontend/src/styles/components.css
+  frontend/src/test/notes-tasks.test.tsx, frontend/e2e/notes-tasks.mjs
+  README.md, CAMBIOS_NOTAS_TAREAS.txt, DOCUMENTACION_MODULO_GRUPOS_DE_TRABAJO.txt
+
+Endpoints nuevos
+  GET    /api/inventory/columns[?include_archived=true]
+  POST   /api/inventory/columns
+  PUT    /api/inventory/columns/order                  {ids:[…]}
+  PUT    /api/inventory/columns/{id}[?dry_run=true]
+  POST   /api/inventory/columns/{id}/archive | /restore
+  DELETE /api/inventory/columns/{id}[?dry_run=true]
+  GET    /api/tasks?scope&status&priority&group&assignee_id&due_from&due_to&my_status
+  GET    /api/tasks/groups                             Mis grupos activos con sus integrantes
+  GET    /api/tasks/{id}                               Detalle con responsables e historial
+  PUT    /api/tasks/{id}/mine                          Estado individual del responsable
+  POST   /api/tasks/{id}/comments                      {comment, request_change}
+  (POST /api/tasks y PUT /api/tasks/{id} aceptan assignee_ids, group, priority y notes)
+
+
+6. FUNCIONALIDADES NUEVAS
+------------------------------------------------------------------------------------------
+Inventario
+- Columna «Observaciones»:
+  - viene por defecto y admite texto extenso (hasta 5000 caracteres);
+  - en la tabla se recorta (el texto completo aparece al pasar el cursor) y en la ficha se ve
+    completo;
+  - es del sistema: no se elimina ni se archiva.
+- Antes de importar:
+  - se ve una muestra de las primeras filas del archivo;
+  - las columnas adicionales que se llamen igual que un encabezado se asignan solas;
+  - se crean columnas nuevas desde los encabezados libres (botón con el nombre del encabezado)
+    o desde cero, con nombre, tipo y opciones.
+- La importación advierte y valida:
+  - encabezados repetidos;
+  - una misma columna del archivo asignada dos veces;
+  - nombres repetidos o de campos principales;
+  - columnas obligatorias que no vienen en el archivo;
+  - valores que no corresponden al tipo (la fila se informa y se omite).
+- Administrar columnas:
+  - ver: nombre, tipo, descripción, estado, posición, si es obligatoria, del sistema o
+    personalizada, y cuántos productos tienen valor;
+  - agregar (con valor predeterminado);
+  - editar: si el cambio afecta productos existentes, primero muestra cuántos y cuáles
+    («Revisar el cambio»);
+  - ordenar con flechas (el orden se guarda);
+  - archivar y restaurar (se conservan los datos);
+  - eliminar, con confirmación y la cantidad de datos que se perderán.
+- La tabla de productos muestra las columnas en su orden, con desplazamiento horizontal dentro de
+  la tabla. En la página no aparece desplazamiento horizontal, ni siquiera en un teléfono de 360 px.
+- Formulario de producto: sección «Información adicional», con un campo adecuado a cada tipo.
+- Búsqueda: también encuentra texto de las columnas adicionales.
+- Exportación (Excel y CSV): incluye las columnas activas, en su orden.
+Tareas
+- El administrador:
+  - elige el grupo, ve sus integrantes y marca uno o varios responsables;
+  - define título, descripción, prioridad, fecha límite y observaciones;
+  - confirma con «Asignar».
+- Seguimiento:
+  - totales de abiertas, en revisión, completadas y vencidas;
+  - filtros por estado, prioridad, responsable, grupo y rango de fecha límite;
+  - cada tarjeta muestra el estado individual de cada responsable y el avance («1 de 2
+    completaron»).
+- El detalle de la tarea muestra:
+  - los responsables, con fechas de inicio y de fin;
+  - los comentarios y el historial.
+  Desde ahí el administrador edita o reasigna, la marca En revisión, la da por completada, la
+  cancela o la reabre. Completar y cancelar piden confirmación.
+- El empleado:
+  - ve sus tareas, en todos sus grupos y sin grupo, con filtros Todas, Pendientes, En progreso y
+    Completadas;
+  - ve la prioridad, la fecha, las observaciones, el grupo y quién la asignó;
+  - puede «Iniciar», «Marcar como completada», volver a «En progreso», comentar y marcar un
+    comentario como «solicitud de cambio».
+  - No puede editar, reasignar, cambiar prioridad o fechas, ni eliminar.
+- Las tareas completadas no desaparecen.
+- Una tarea solo se elimina si nadie registró avance ni comentarios. En los demás casos se cancela
+  y se conserva su historial.
+
+
+7. PERMISOS (todos validados en el servidor)
+------------------------------------------------------------------------------------------
+- Columnas:
+  - crear, editar, ordenar, archivar y eliminar requieren «inventario.columnas» (solo
+    administradores);
+  - consultar requiere «inventario.ver»;
+  - modificar los valores de un producto requiere «inventario.editar».
+- Tareas de grupo:
+  - las crea, edita y elimina solo el dueño del grupo;
+  - solo se asignan a integrantes activos (422 en otro caso);
+  - otro administrador u otro empleado no las ve (404);
+  - el responsable solo cambia SU estado (403 para todo lo demás).
+- La identidad sale siempre de la sesión. Los modelos de entrada rechazan campos extra (422), por
+  ejemplo user_id o is_system.
+
+
+8. PRUEBAS EJECUTADAS Y RESULTADOS
+------------------------------------------------------------------------------------------
+Automáticas
+  - Backend: 177 pruebas, todas pasan; ruff sin errores.
+    - test_inventory_columns.py: escenarios del inventario 1 a 11 y permisos.
+    - test_group_tasks.py: escenarios de tareas 1 a 10, grupos ajenos, integrantes retirados,
+      grupo cerrado, avisos en vivo y HTTP con cuatro sesiones.
+  - Frontend: 75 pruebas de vitest, todas pasan; TypeScript y ESLint sin errores.
+Navegador real (Microsoft Edge) + servidor real (frontend/e2e/columns-group-tasks.mjs): todo
+correcto.
+  A1  «Observaciones» por defecto y protegida
+  A2  CSV real: muestra del archivo y asignación automática de «Observaciones»
+  A3  Fila inválida informada; la vista previa no crea columnas
+  A4  Al aplicar se crean «Marca» y «Ubicación» y se guardan los valores en la tabla
+  A5  «Garantía» (Sí/No) agregada después; observación extensa recortada en la tabla (320 px)
+  A6  El cambio no seguro (texto a entero) se bloquea indicando el motivo; el renombre funciona
+  A7  Archivar oculta la columna y conserva sus datos; eliminar avisa «2 producto(s)» y borra
+  A8  El nuevo orden se conserva al recargar
+  A9  Un producto anterior sigue igual; una venta descuenta existencias sin tocar las columnas
+  A10 La exportación incluye las columnas en su orden
+  B1–B3 Asignación a dos integrantes; Caro (fuera del grupo) no aparece en el diálogo
+  B4/B10 Ana recibe la tarea en su navegador sin recargar (~430 ms)
+  B5  Caro no la ve (lista vacía y 404); el servidor rechaza asignársela (422)
+  B6/B7 Ana inicia y el administrador lo ve en vivo (~240 ms)
+  B8  Avance 1 de 2: sigue «En progreso». Cuando Beto termina, pasa a «Completada»
+  B   Solicitud de cambio por comentario, visible en el historial del administrador
+  B   Por API manipulada, Ana no cambia prioridad, fechas ni responsables, ni elimina (403)
+  A11/B9 Tras detener y volver a arrancar el servidor sigue todo: columnas, orden, valores y
+      tareas con su avance
+  Teléfono de 360 px sin desplazamiento horizontal: grupo, inventario y administrar columnas.
+  Sin errores de JavaScript.
+Regresión
+  - Suite completa del backend: ventas, compras, inventario, movimientos, finanzas, informes,
+    usuarios, roles, grupos, invitaciones, notas, respaldos y sincronización.
+  - e2e/notes-tasks.mjs (12 escenarios), e2e/groups.mjs y npm run e2e (prueba general).
+Errores encontrados y corregidos al probar
+  - Al pasar de «Mis tareas» a «Asignadas a mí», el tablero heredaba el filtro de la otra pestaña
+    y no mostraba las tareas.
+  - Después de editar un producto, la ficha lateral seguía mostrando los datos anteriores. El error
+    ya existía antes de este cambio.
+
+
+9. PROBLEMAS PENDIENTES / LIMITACIONES
+------------------------------------------------------------------------------------------
+- No se puede ordenar la tabla por una columna adicional. Sí se puede buscar en ellas.
+- Las conexiones de sincronización permanentes (Gestión › Integraciones) importan solo los campos
+  principales. Las columnas adicionales se importan desde «Importar y exportar».
+- No hay un campo de porcentaje de avance: el avance se mide por responsables que terminaron.
+- Las solicitudes de cambio son comentarios marcados; el administrador decide y edita la tarea.
+- Fuera de la aplicación no hay notificaciones (correo ni notificaciones push).
+- Pendiente de antes: probar con dispositivos físicos reales por Internet.
+
+
+10. INSTRUCCIONES DE USO
+------------------------------------------------------------------------------------------
+Columnas
+- Inventario › Administrar columnas › «Agregar columna»: nombre, tipo, descripción y, si es
+  obligatoria, valor predeterminado. Use las flechas para ordenar. «Archivar» la oculta sin perder
+  datos; «Eliminar» borra sus datos (pide confirmación).
+- Importar con columnas nuevas: Inventario › Importar y exportar › elija el archivo › revise la
+  muestra › en «Agregar columnas nuevas» pulse el botón con el nombre del encabezado (por
+  ejemplo, «Marca»), ajuste el nombre y el tipo › «Ver vista previa» › «Aplicar cambios».
+- Valores: en el producto pulse «Editar». La sección «Información adicional» tiene un campo por
+  columna.
+Tareas
+- Administrador: Grupos › abra el grupo › «Tareas del grupo» › «Asignar tarea» › marque los
+  responsables › «Asignar». También desde Notas y tareas › Tareas asignadas, eligiendo el grupo.
+  «Detalle» muestra el avance de cada persona, los comentarios y el historial.
+- Empleado: Notas y tareas › Asignadas a mí, o la página de su grupo. Use «Iniciar» y «Marcar como
+  completada». En «Detalle» puede comentar o marcar el comentario como solicitud de cambio.
+Pruebas
+  cd backend;  .venv\Scripts\python.exe -m pytest tests\test_inventory_columns.py tests\test_group_tasks.py
+  cd frontend; npm test;  npm run build;  node e2e/columns-group-tasks.mjs

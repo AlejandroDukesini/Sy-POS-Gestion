@@ -8,6 +8,7 @@ import { NumberField, SelectField, TextField } from '../../components/ui/Form';
 import { useAuth } from '../../context/Auth';
 import { useToast } from '../../context/Toast';
 import { toApiNumber } from '../../lib/format';
+import { CustomField, type InventoryColumn } from './Columns';
 import type { Product } from './InventoryPage';
 
 const UNIT_LABELS: Record<string, string> = {
@@ -15,8 +16,8 @@ const UNIT_LABELS: Record<string, string> = {
   caja: 'Caja', paquete: 'Paquete', servicio: 'Servicio',
 };
 
-export function ProductForm({ product, categories, units, onClose, onSaved }: {
-  product: Product | null; categories: { id: number; name: string }[]; units: string[];
+export function ProductForm({ product, categories, units, columns = [], onClose, onSaved }: {
+  product: Product | null; categories: { id: number; name: string }[]; units: string[]; columns?: InventoryColumn[];
   onClose: () => void; onSaved: (p: Product) => void;
 }) {
   const { can } = useAuth();
@@ -26,6 +27,9 @@ export function ProductForm({ product, categories, units, onClose, onSaved }: {
     unit: product?.unit ?? 'und', price: product?.price ?? '', discount_price: product?.discount_price ?? '',
     cost: product?.cost ?? '', tax_rate: product?.tax_rate ?? '0', min_stock: product?.min_stock ?? '', initial_stock: '',
   });
+  // Columnas adicionales: valor actual o, en un producto nuevo, el predeterminado de la columna.
+  const [custom, setCustom] = useState<Record<string, string>>(() => Object.fromEntries(columns.map((c) => [
+    String(c.id), product ? (product.custom?.[String(c.id)] ?? '') : (c.default_value ?? '')])));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
@@ -59,6 +63,13 @@ export function ProductForm({ product, categories, units, onClose, onSaved }: {
     };
     if (can('inventario.costos')) body.cost = toApiNumber(form.cost || '0');
     if (!product && form.initial_stock.trim()) body.initial_stock = toApiNumber(form.initial_stock);
+    if (columns.length) {
+      body.custom = Object.fromEntries(Object.entries(custom).map(([k, v]) => {
+        const c = columns.find((col) => String(col.id) === k);
+        const text = v.trim();
+        return [k, text === '' ? null : c && (c.data_type === 'entero' || c.data_type === 'decimal') ? toApiNumber(text) : text];
+      }));
+    }
     if (product) body.version = product.version;
     setBusy(true);
     setError(null);
@@ -104,6 +115,19 @@ export function ProductForm({ product, categories, units, onClose, onSaved }: {
             hint="Se registra como movimiento de existencia inicial." />
         )}
       </div>
+      {columns.length > 0 && (
+        <fieldset>
+          <legend>Información adicional</legend>
+          <div className="form-grid">
+            {columns.map((c) => (
+              <div key={c.id} style={c.data_type === 'texto_largo' ? { gridColumn: '1 / -1' } : undefined}>
+                <CustomField column={c} value={custom[String(c.id)] ?? ''} error={errors[`custom.${c.id}`]}
+                  onChange={(v) => setCustom((x) => ({ ...x, [String(c.id)]: v }))} />
+              </div>
+            ))}
+          </div>
+        </fieldset>
+      )}
       {product && <p className="muted">La existencia no se edita aquí: use Entrada, Salida o Ajuste para conservar el historial.</p>}
     </Dialog>
   );

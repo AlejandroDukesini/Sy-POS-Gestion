@@ -23,6 +23,8 @@ CATALOG: tuple[Permission, ...] = (
     Permission("inventario.editar", "Crear, editar y desactivar productos", "Inventario"),
     Permission("inventario.movimientos", "Registrar entradas, salidas y ajustes", "Inventario"),
     Permission("inventario.importar", "Importar y exportar inventario", "Inventario"),
+    Permission("inventario.columnas", "Administrar las columnas del inventario (agregar, editar, ordenar, archivar y eliminar)",
+               "Inventario", admin_only=True),
     Permission("observaciones.ver", "Consultar observaciones de inventario", "Inventario"),
     Permission("observaciones.crear", "Registrar observaciones de inventario y adjuntar archivos", "Inventario"),
     Permission("observaciones.editar", "Editar observaciones de inventario (datos y prioridad)", "Inventario"),

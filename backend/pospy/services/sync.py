@@ -35,6 +35,8 @@ from ..core.errors import ConflictError, DomainError, NotFoundError, ValidationE
 from ..core.money import from_cents, from_milli, to_bp, to_cents, to_milli
 from ..integrations import tabular
 from ..integrations.sources import ADAPTERS, PROVIDER_LABELS, OAuthAdapter, SourceFile
+from .columns import TYPES, coerce
+from .columns import _norm as norm_name
 from .inventory import UNITS, InventoryService
 
 log = logging.getLogger("pospy.sync")
@@ -234,10 +236,22 @@ class SyncService:
     def inspect_upload(self, actor: Actor, filename: str, content: bytes, sheet: str = "", header_row: int = 0) -> dict:
         actor.require("inventario.importar")
         table = tabular.read_table(content, filename, sheet, header_row)
+        suggested = tabular.suggest_columns(table.headers)
+        with self.db.read() as conn:
+            extra = self.inventory.columns.columns_conn(conn)
+        # Columnas adicionales existentes cuyo nombre coincide con un encabezado del archivo.
+        free = {norm_name(h): h for h in table.headers if h and h not in suggested.values()}
+        suggested_custom = {str(c["id"]): free[norm_name(c["name"])] for c in extra if norm_name(c["name"]) in free}
         return {"file": filename, "sheets": table.sheets, "sheet": table.sheet, "header_row": table.header_row,
-                "headers": table.headers, "suggested_columns": tabular.suggest_columns(table.headers),
+                "headers": table.headers, "suggested_columns": suggested,
                 "sample": [[_cell(v) for v in row] for row in table.rows[:8]], "rows": len(table.rows),
-                "fields": tabular.FIELDS, "required": list(tabular.REQUIRED)}
+                "fields": tabular.FIELDS, "required": list(tabular.REQUIRED),
+                "duplicate_headers": tabular.duplicate_headers(table.headers),
+                "empty_headers": sum(1 for h in table.headers if not h),
+                "custom_columns": [{k: c[k] for k in ("id", "name", "data_type", "required", "default_value", "options",
+                                                      "is_system", "description")} for c in extra],
+                "suggested_custom": suggested_custom, "types": TYPES,
+                "can_create_columns": actor.can("inventario.columnas")}
 
     def preview_upload(self, actor: Actor, filename: str, content: bytes, options: dict) -> dict:
         actor.require("inventario.importar")
@@ -249,6 +263,7 @@ class SyncService:
                 "adjust_stock": bool(options.get("adjust_stock", False))}
         if opts["adjust_stock"]:
             actor.require("inventario.movimientos")
+        opts["custom"] = self._custom_plan(actor, options.get("custom") or [])
         return self._preview(actor, None, SourceFile(Path(filename).name, content), opts, "archivo",
                              f"Archivo {Path(filename).name}")
 
@@ -274,11 +289,21 @@ class SyncService:
                  label: str) -> dict:
         table = tabular.read_table(source.content, source.name, opts["sheet"], opts["header_row"])
         columns = opts["columns"] or tabular.suggest_columns(table.headers)
-        records = tabular.to_records(table, columns)
+        plan = opts.get("custom") or []
+        records = tabular.to_records(table, columns, {p["ref"]: (p["header"], p["name"]) for p in plan})
         with self.db.read() as conn:
-            diff = self._diff(conn, records, opts)
+            defs = self._custom_defs(conn, plan)
+            _coerce_custom(records, defs)
+            diff = self._diff(conn, records, opts, defs)
+            mapped = {p["column_id"] for p in plan if p.get("column_id")}
+            warnings = [f"La columna obligatoria «{c['name']}» no está en el archivo: los productos nuevos tomarán el valor"
+                        f" predeterminado «{c['default_value']}»." for c in self.inventory.columns.columns_conn(conn)
+                        if c["required"] and c["id"] not in mapped]
+        if tabular.duplicate_headers(table.headers):
+            warnings.append("Encabezados repetidos en el archivo (no se pueden importar): "
+                            + ", ".join(tabular.duplicate_headers(table.headers)) + ".")
         summary = {"file": source.name, "modified": source.modified, "sheet": table.sheet, "header_row": table.header_row,
-                   "columns": columns, "options": opts, **diff}
+                   "columns": columns, "options": opts, "warnings": warnings, **diff}
         with self.db.tx() as conn:
             run_id = conn.execute("INSERT INTO sync_runs(connection_id, source_label, started_at, status, trigger,"
                                   " source_sha256, summary, user_id) VALUES (?,?,?,?,?,?,?,?)",
@@ -288,7 +313,51 @@ class SyncService:
         (self.imports_dir / f"run-{run_id}{suffix}").write_bytes(source.content)
         return self.run(actor, run_id)
 
-    def _diff(self, conn: sqlite3.Connection, records: list[tabular.Record], opts: dict) -> dict:
+    def _custom_plan(self, actor: Actor, items: list) -> list[dict]:
+        """Valida las columnas adicionales elegidas para importar (existentes o nuevas). No crea nada todavía."""
+        if not isinstance(items, list) or len(items) > 60:
+            raise ValidationError("Lista de columnas adicionales no válida.")
+        plan, seen_ids, new_names = [], set(), set()
+        with self.db.read() as conn:
+            existing = {c["id"]: c for c in self.inventory.columns.columns_conn(conn)}
+            for i, item in enumerate(items):
+                if not isinstance(item, dict):
+                    raise ValidationError("Columna adicional no válida.")
+                header = str(item.get("header") or "").strip()
+                if not header:
+                    raise ValidationError("Elija la columna del archivo para cada columna adicional.", {"custom": "Falta el encabezado."})
+                if item.get("new"):
+                    actor.require("inventario.columnas")
+                    definition = self.inventory.columns.validate_definition(conn, dict(item["new"]), taken=new_names)
+                    new_names.add(norm_name(definition["name"]))
+                    plan.append({"ref": f"n{i}", "new": definition, "header": header, "name": definition["name"]})
+                else:
+                    try:
+                        column_id = int(item.get("column_id"))
+                    except (TypeError, ValueError):
+                        raise ValidationError("Columna adicional no válida.") from None
+                    if column_id not in existing:
+                        raise ValidationError("Una de las columnas elegidas ya no existe o está archivada. Recargue.")
+                    if column_id in seen_ids:
+                        raise ValidationError(f"La columna «{existing[column_id]['name']}» está asignada dos veces.")
+                    seen_ids.add(column_id)
+                    plan.append({"ref": f"c{column_id}", "column_id": column_id, "header": header,
+                                 "name": existing[column_id]["name"]})
+        return plan
+
+    def _custom_defs(self, conn: sqlite3.Connection, plan: list[dict]) -> dict[str, dict]:
+        existing = {c["id"]: c for c in self.inventory.columns.columns_conn(conn)}
+        defs = {}
+        for p in plan:
+            if p.get("new"):
+                defs[p["ref"]] = {**p["new"], "id": None}
+            elif p["column_id"] in existing:
+                defs[p["ref"]] = existing[p["column_id"]]
+            else:
+                raise ValidationError(f"La columna «{p['name']}» ya no existe o fue archivada. Genere otra vista previa.")
+        return defs
+
+    def _diff(self, conn: sqlite3.Connection, records: list[tabular.Record], opts: dict, defs: dict | None = None) -> dict:
         counts = Counter(r.code.lower() for r in records if r.code)
         new, changes, stock_diff, cost_diff, invalid, duplicates, unchanged = [], [], [], [], [], [], 0
         for rec in records:
@@ -304,9 +373,12 @@ class SyncService:
             if v.get("unit") and v["unit"] not in UNITS:
                 invalid.append({"row": rec.row, "code": rec.code, "errors": [f"Unidad «{v['unit']}» no reconocida."]})
                 continue
+            custom = rec.custom
+            names = {ref: d["name"] for ref, d in (defs or {}).items()}
             if product is None:
                 new.append({"row": rec.row, "code": rec.code, "description": v["description"],
-                            "price": str(v["price"]), "stock": str(v.get("stock", 0))})
+                            "price": str(v["price"]), "stock": str(v.get("stock", 0)),
+                            "custom": {names[ref]: value for ref, value in custom.items()}})
                 continue
             fields = {}
             compare = {"description": (product["description"], v.get("description")),
@@ -322,6 +394,13 @@ class SyncService:
             for key, (old, newv) in compare.items():
                 if newv != "__omit__" and newv is not None and str(old) != str(newv):
                     fields[key] = {"antes": old, "despues": newv}
+            if custom:
+                stored = dict(conn.execute("SELECT column_id, value FROM inventory_custom_values WHERE product_id = ?",
+                                           (product["id"],)).fetchall())
+                for ref, value in custom.items():
+                    old = stored.get(defs[ref]["id"]) if defs[ref].get("id") else None
+                    if old != value:
+                        fields[names[ref]] = {"antes": old, "despues": value}
             if fields:
                 changes.append({"row": rec.row, "code": rec.code, "product_id": product["id"], "fields": fields})
             stock_changed = False
@@ -346,7 +425,9 @@ class SyncService:
             "cost_differences": cost_diff[:DETAIL_LIMIT], "invalid": invalid[:DETAIL_LIMIT],
             "duplicates": duplicates[:DETAIL_LIMIT],
             "will": {"create": opts["create_missing"], "update_catalog": opts["update_catalog"],
-                     "adjust_stock": opts["adjust_stock"]},
+                     "adjust_stock": opts["adjust_stock"],
+                     "new_columns": [p["name"] for p in opts.get("custom") or [] if p.get("new")],
+                     "custom_columns": [p["name"] for p in opts.get("custom") or []]},
         }
 
     def runs(self, actor: Actor, limit: int = 50) -> list[dict]:
@@ -402,12 +483,28 @@ class SyncService:
             current = self._adapter(c).fetch()
             if current.sha256 != run["source_sha256"]:
                 raise ValidationError("La fuente cambió desde la vista previa. Genere otra vista previa antes de aplicar.")
+        plan = opts.get("custom") or []
+        if any(p.get("new") for p in plan) and actor is not SYSTEM:
+            actor.require("inventario.columnas")
         table = tabular.read_table(content, summary["file"], summary["sheet"], summary["header_row"])
-        records = tabular.to_records(table, summary["columns"])
+        records = tabular.to_records(table, summary["columns"], {p["ref"]: (p["header"], p["name"]) for p in plan})
+        with self.db.read() as conn:
+            _coerce_custom(records, self._custom_defs(conn, plan))
         counts = Counter(r.code.lower() for r in records if r.code)
-        applied = {"created": 0, "updated": 0, "stock_adjusted": 0, "stock_reported": 0, "skipped": 0, "errors": []}
+        applied = {"created": 0, "updated": 0, "stock_adjusted": 0, "stock_reported": 0, "skipped": 0, "errors": [],
+                   "columns_created": []}
         label = run["source_label"] or summary["file"]
         with self.db.tx() as conn:
+            # Las columnas nuevas se crean solo ahora: cancelar o descartar la vista previa no deja rastro.
+            ids = {}
+            for p in plan:
+                if p.get("new"):
+                    ids[p["ref"]], _ = self.inventory.columns.create_conn(conn, actor, p["new"])
+                    applied["columns_created"].append(p["name"])
+                else:
+                    ids[p["ref"]] = p["column_id"]
+            for rec in records:
+                rec.custom = {str(ids[ref]): value for ref, value in rec.custom.items()}
             for rec in records:
                 if rec.errors or counts[rec.code.lower()] > 1:
                     applied["skipped"] += 1
@@ -444,7 +541,8 @@ class SyncService:
                 return
             data = {"code": rec.code, "description": v["description"], "price": v["price"],
                     "discount_price": v.get("discount_price"), "cost": v.get("cost", 0), "tax_rate": v.get("tax_rate", 0),
-                    "min_stock": v.get("min_stock"), "unit": v.get("unit") or "und", "category_id": category_id}
+                    "min_stock": v.get("min_stock"), "unit": v.get("unit") or "und", "category_id": category_id,
+                    "custom": rec.custom, "_import": True}
             pid = self.inventory.create_conn(conn, actor, data)
             stock = v.get("stock")
             if stock is not None and stock > 0:
@@ -463,6 +561,9 @@ class SyncService:
                     data[key] = v[key]
             if category_id:
                 data["category_id"] = category_id
+            if rec.custom:
+                data["custom"] = rec.custom      # solo valores no vacíos: una celda vacía no borra lo existente
+                data["_import"] = True
             if self.inventory.update_conn(conn, actor, product["id"], data):
                 applied["updated"] += 1
         if "stock" in v:
@@ -519,6 +620,20 @@ class SyncService:
                 log.exception("Error inesperado al sincronizar la conexión %s", c["id"])
                 self._mark(c["id"], "error", "Error inesperado; revise el registro del servidor.")
         return done
+
+
+def _coerce_custom(records: list[tabular.Record], defs: dict[str, dict]) -> None:
+    """Valida cada celda de columnas adicionales según su tipo. Las vacías no se importan."""
+    for rec in records:
+        rec.custom = {}
+        for ref, raw in rec.extra.items():
+            try:
+                value = coerce(defs[ref], raw)
+            except ValueError as exc:
+                rec.errors.append(f"{defs[ref]['name']}: {exc}.")
+                continue
+            if value is not None:
+                rec.custom[ref] = value
 
 
 def _money(value) -> str | None:

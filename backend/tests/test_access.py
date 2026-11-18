@@ -41,7 +41,8 @@ def users_snapshot(app):
     with app.db.read() as conn:
         users = [tuple(r) for r in conn.execute("SELECT id, username, full_name, role, active, password_hash FROM users ORDER BY id")]
         permissions = [tuple(r) for r in conn.execute("SELECT * FROM user_permissions ORDER BY user_id, permission")]
-        tasks = [tuple(r) for r in conn.execute("SELECT id, assignee_id, status FROM tasks ORDER BY id")]
+        tasks = [tuple(r) for r in conn.execute("SELECT t.id, a.user_id, t.status FROM tasks t JOIN task_assignees a"
+                                                  " ON a.task_id = t.id ORDER BY t.id, a.user_id")]
     return users, permissions, tasks
 
 
@@ -274,7 +275,7 @@ def test_D_tasks_survive_employee_deactivation(ctx, admin, employee):
     task = ctx.tasks.create(admin, {"title": "Revisar precios", "assignee_id": employee.id})
     ctx.users.update(admin, employee.id, {"active": False})
     listed = ctx.tasks.list(admin, assignee_id=employee.id)
-    assert [t["id"] for t in listed] == [task["id"]] and listed[0]["assignee_active"] == 0
+    assert [t["id"] for t in listed] == [task["id"]] and listed[0]["assignees"][0]["user_active"] == 0
     with pytest.raises(ValidationError):                            # no se asignan tareas nuevas a inactivos
         ctx.tasks.create(admin, {"title": "Otra", "assignee_id": employee.id})
     with pytest.raises(PermissionDenied):                           # el responsable no borra tareas asignadas

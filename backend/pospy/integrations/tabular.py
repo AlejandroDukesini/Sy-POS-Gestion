@@ -52,6 +52,8 @@ class Record:
     code: str
     values: dict = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
+    extra: dict = field(default_factory=dict)      # celdas de columnas adicionales sin interpretar: {ref: valor}
+    custom: dict = field(default_factory=dict)     # las mismas, ya validadas y normalizadas (vacías excluidas)
 
 
 def read_table(content: bytes, filename: str, sheet: str = "", header_row: int = 0) -> Table:
@@ -116,26 +118,51 @@ def suggest_columns(headers: list[str]) -> dict[str, str]:
     return out
 
 
-def to_records(table: Table, columns: dict[str, str]) -> list[Record]:
+def duplicate_headers(headers: list[str]) -> list[str]:
+    """Encabezados que aparecen más de una vez (sin distinguir mayúsculas, tildes ni espacios)."""
+    seen: dict[str, int] = {}
+    for h in headers:
+        if h:
+            seen[_norm(h)] = seen.get(_norm(h), 0) + 1
+    return [h for h in dict.fromkeys(headers) if h and seen[_norm(h)] > 1]
+
+
+def to_records(table: Table, columns: dict[str, str], extra: dict[str, tuple[str, str]] | None = None) -> list[Record]:
+    """extra: columnas adicionales {ref: (encabezado del archivo, nombre de la columna)}."""
     missing = [FIELDS[f] for f in REQUIRED if not columns.get(f)]
     if missing:
         raise ValidationError("Asigne las columnas obligatorias: " + ", ".join(missing), {"columns": "Faltan columnas."})
+    duplicated = set(duplicate_headers(table.headers))
+    used: dict[str, str] = {}
+
+    def locate(header: str, label: str) -> int:
+        if header not in table.headers:
+            raise ValidationError(f"La columna «{header}» no existe en el archivo.", {"columns": f"«{header}» no encontrada."})
+        if header in duplicated:
+            raise ValidationError(f"El encabezado «{header}» aparece varias veces en el archivo: renómbrelo para saber cuál importar.",
+                                  {"columns": f"«{header}» repetido."})
+        if header in used:
+            raise ValidationError(f"La columna «{header}» del archivo está asignada a «{used[header]}» y a «{label}».",
+                                  {"columns": f"«{header}» asignada dos veces."})
+        used[header] = label
+        return table.headers.index(header)
+
     index = {}
     for fld, header in columns.items():
         if not header:
             continue
         if fld not in FIELDS:
             raise ValidationError(f"Campo desconocido en el mapeo: {fld}")
-        if header not in table.headers:
-            raise ValidationError(f"La columna «{header}» no existe en el archivo.", {"columns": f"«{header}» no encontrada."})
-        index[fld] = table.headers.index(header)
+        index[fld] = locate(header, FIELDS[fld])
+    extra_index = {ref: locate(header, label) for ref, (header, label) in (extra or {}).items() if header}
     records = []
     for offset, row in enumerate(table.rows):
         row_no = table.header_row + offset + 1
         cells = {fld: (row[i] if i < len(row) else None) for fld, i in index.items()}
-        if all(v in (None, "") for v in cells.values()):
+        extra_cells = {ref: (row[i] if i < len(row) else None) for ref, i in extra_index.items()}
+        if all(v in (None, "") for v in (*cells.values(), *extra_cells.values())):
             continue
-        rec = Record(row=row_no, code=str(cells.get("code") or "").strip())
+        rec = Record(row=row_no, code=str(cells.get("code") or "").strip(), extra=extra_cells)
         if isinstance(cells.get("code"), float) and cells["code"].is_integer():
             rec.code = str(int(cells["code"]))
         if not rec.code:

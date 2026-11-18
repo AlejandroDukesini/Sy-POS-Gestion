@@ -1,5 +1,5 @@
 import { ArrowDownToLine, ArrowUpFromLine, ClipboardCheck, ClipboardList, History, Pencil, Plus, Power, Search, X } from 'lucide-react';
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { Link, Route, Routes, useSearchParams } from 'react-router-dom';
 import { put, qs } from '../../api/client';
 import { Button } from '../../components/ui/Button';
@@ -12,6 +12,7 @@ import { useAuth } from '../../context/Auth';
 import { useToast } from '../../context/Toast';
 import { dateTime, money, pct, qty } from '../../lib/format';
 import { useApi, useDebounced, useOnline } from '../../lib/hooks';
+import { ColumnsAdmin, CustomValue, useInventoryColumns, type InventoryColumn } from './Columns';
 import { ImportExport } from './ImportExport';
 import { MovementDialog, type MovementKind } from './MovementDialog';
 import { MovementsTable } from './MovementsTable';
@@ -23,7 +24,7 @@ export interface Product {
   id: number; code: string; description: string; category_id: number | null; category_name: string | null; unit: string;
   price: string; discount_price: string | null; cost?: string; tax_rate: string; stock: string; min_stock: string;
   active: number; low_stock: boolean; version: number; external_ref: string | null; updated_at: string;
-  created_by_name?: string; updated_by_name?: string;
+  created_by_name?: string; updated_by_name?: string; custom?: Record<string, string>;
 }
 
 export default function InventoryPage() {
@@ -36,12 +37,14 @@ export default function InventoryPage() {
         { to: '/inventario/movimientos', label: 'Movimientos' },
         ...(can('observaciones.ver') ? [{ to: '/inventario/observaciones', label: 'Observaciones' }] : []),
         ...(can('inventario.importar') ? [{ to: '/inventario/importar', label: 'Importar y exportar' }] : []),
+        ...(can('inventario.columnas') ? [{ to: '/inventario/columnas', label: 'Administrar columnas' }] : []),
       ]} />
       <Routes>
         <Route index element={<Products />} />
         <Route path="movimientos" element={<Card><MovementsTable /></Card>} />
         {can('observaciones.ver') && <Route path="observaciones/*" element={<ObservationsRoutes />} />}
         <Route path="importar" element={<ImportExport />} />
+        {can('inventario.columnas') && <Route path="columnas" element={<ColumnsAdmin />} />}
       </Routes>
     </>
   );
@@ -59,10 +62,12 @@ function Products() {
   const [params] = useSearchParams();
   const [selected, setSelected] = useState<number | null>(Number(params.get('producto')) || null);
   const [editing, setEditing] = useState<Product | 'new' | null>(null);
+  const [saved, setSaved] = useState(0);   // vuelve a cargar la ficha tras editar el producto
   const search = useDebounced(q.trim(), 300);
   const list = useApi(`/products${qs({ q: search, category_id: category, status, low_stock: lowStock, sort, direction, page, page_size: 25 })}`);
   const categories = useApi<any[]>('/categories');
   const meta = useApi('/products/meta');
+  const extra = useInventoryColumns();
   const showCost = can('inventario.costos');
   const pageIds = (list.data?.items ?? []).map((p: Product) => p.id).join(',');
   const flags = useApi<Record<string, { open: number; critical: number }>>(
@@ -95,6 +100,10 @@ function Products() {
         {p.low_stock && <Badge kind="warning">Bajo</Badge>}
         <strong>{qty(p.stock)}</strong> <span className="muted">{p.unit}</span>
       </span>) },
+    ...(extra.data?.columns ?? []).map((c) => ({
+      key: `custom-${c.id}`, header: c.name, numeric: c.data_type === 'entero' || c.data_type === 'decimal',
+      render: (p: Product) => <CustomValue column={c} value={p.custom?.[String(c.id)]} clip />,
+    })),
   ];
 
   const summary = meta.data?.summary;
@@ -148,20 +157,21 @@ function Products() {
             )}
         </Card>
         {selected && (
-          <ProductPanel id={selected} onClose={() => setSelected(null)} onChanged={refresh}
-            onEdit={(p) => setEditing(p)} />
+          <ProductPanel key={`${selected}-${saved}`} id={selected} onClose={() => setSelected(null)} onChanged={refresh}
+            onEdit={(p) => setEditing(p)} columns={extra.data?.columns ?? []} />
         )}
       </div>
       {editing && (
         <ProductForm product={editing === 'new' ? null : editing} categories={categories.data ?? []} units={meta.data?.units ?? ['und']}
-          onClose={() => setEditing(null)} onSaved={(p) => { setEditing(null); setSelected(p.id); refresh(); categories.reload(); }} />
+          columns={extra.data?.columns ?? []}
+          onClose={() => setEditing(null)} onSaved={(p) => { setEditing(null); setSelected(p.id); setSaved((n) => n + 1); refresh(); categories.reload(); }} />
       )}
     </>
   );
 }
 
-function ProductPanel({ id, onClose, onChanged, onEdit }: {
-  id: number; onClose: () => void; onChanged: () => void; onEdit: (p: Product) => void;
+function ProductPanel({ id, onClose, onChanged, onEdit, columns }: {
+  id: number; onClose: () => void; onChanged: () => void; onEdit: (p: Product) => void; columns: InventoryColumn[];
 }) {
   const { can } = useAuth();
   const { notify } = useToast();
@@ -218,6 +228,7 @@ function ProductPanel({ id, onClose, onChanged, onEdit }: {
               {p.cost !== undefined && <><dt>Costo promedio</dt><dd>{money(p.cost)}</dd></>}
               <dt>IVA</dt><dd>{pct(p.tax_rate)}</dd>
               <dt>Actualizado</dt><dd>{dateTime(p.updated_at)}{p.updated_by_name ? ` · ${p.updated_by_name}` : ''}</dd>
+              {columns.map((c) => <Fragment key={c.id}><dt>{c.name}</dt><dd><CustomValue column={c} value={p.custom?.[String(c.id)]} /></dd></Fragment>)}
             </dl>
             {!online && <Alert kind="warning">Sin conexión: las operaciones están deshabilitadas.</Alert>}
             {can('inventario.movimientos') && p.active ? (

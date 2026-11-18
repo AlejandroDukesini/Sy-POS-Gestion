@@ -122,7 +122,7 @@ try {
   await ana.getByText('No tiene tareas pendientes.').waitFor();
   await ana.getByRole('button', { name: 'Nueva tarea' }).first().click();
   await ana.getByRole('dialog').getByLabel('Tarea', { exact: false }).first().fill('Ordenar vitrina');
-  check(await ana.getByRole('dialog').getByLabel('Responsable').count() === 0, '3  Una tarea personal no pide responsable');
+  check(await ana.getByRole('dialog').getByRole('checkbox').count() === 0, '3  Una tarea personal no pide responsable');
   await ana.getByRole('dialog').getByRole('button', { name: 'Guardar' }).click();
   await card(ana, 'Ordenar vitrina').waitFor();
   check(true, '3  Ana crea una tarea personal');
@@ -137,28 +137,28 @@ try {
   // ------------------------------------------------------------ 5. asignar a Ana
   await admin.getByRole('link', { name: 'Tareas asignadas' }).click();
   await admin.getByRole('tab', { name: 'Todas' }).click();
-  await admin.getByText('No hay tareas asignadas para mostrar.').waitFor();
-  await admin.getByRole('button', { name: 'Nueva tarea' }).first().click();
+  await admin.getByText('No hay tareas asignadas en esta vista.').waitFor();
+  await admin.getByRole('button', { name: 'Asignar tarea' }).first().click();
   const dlg = admin.getByRole('dialog');
   await dlg.getByLabel('Tarea', { exact: false }).first().fill('Contar bodega');
   await dlg.getByLabel('Descripción', { exact: false }).fill('Pasillo 3, estantería B');
-  await dlg.getByLabel('Responsable').selectOption({ label: 'Ana Caja' });
+  await dlg.getByRole('checkbox', { name: 'Ana Caja' }).check();   // sin grupos: cualquier persona activa
   await dlg.getByLabel('Fecha límite', { exact: false }).fill('2030-01-10');
-  await dlg.getByRole('button', { name: 'Guardar' }).click();
+  await dlg.getByRole('button', { name: 'Asignar' }).click();
   const adminTask = card(admin, 'Contar bodega');
   await adminTask.waitFor();
   check(await adminTask.getByText('Ana Caja').count() === 1, '5  El administrador asigna la tarea y ve a la responsable');
   check(await card(admin, 'Pagar arriendo').count() === 0, '   Sus tareas personales no se mezclan con las asignadas');
 
   // ------------------------------------------------------------ 6–9. Ana trabaja la tarea; el admin lo ve en vivo
-  await ana.getByRole('link', { name: 'Tareas asignadas' }).click();
+  await ana.getByRole('link', { name: 'Asignadas a mí' }).click();
   const anaTask = card(ana, 'Contar bodega');
   await anaTask.waitFor();
   check(await anaTask.getByText('Pasillo 3, estantería B').count() === 1, '6  Ana ve la tarea asignada y su descripción');
   check(await anaTask.getByRole('button', { name: 'Editar' }).count() === 0
     && await anaTask.getByRole('button', { name: 'Eliminar' }).count() === 0
-    && await ana.getByRole('button', { name: 'Nueva tarea' }).count() === 0, '11 Ana no tiene botones para editar, eliminar ni asignar');
-  await anaTask.getByLabel('Estado').selectOption('en_curso');
+    && await ana.getByRole('button', { name: 'Asignar tarea' }).count() === 0, '11 Ana no tiene botones para editar, eliminar ni asignar');
+  await anaTask.getByLabel('Mi estado').selectOption('en_curso');
   let t0 = Date.now();
   await adminTask.getByText('En progreso', { exact: true }).first().waitFor({ timeout: 15000 });
   check(true, `7/9 Ana la pone «En progreso» y el administrador lo ve sin recargar (${Date.now() - t0} ms)`);

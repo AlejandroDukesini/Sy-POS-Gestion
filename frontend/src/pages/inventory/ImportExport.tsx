@@ -1,16 +1,19 @@
-import { CheckCircle2, Download, FileSpreadsheet, Trash2, Upload } from 'lucide-react';
+import { CheckCircle2, Download, FileSpreadsheet, Plus, Trash2, Upload, X } from 'lucide-react';
 import { useState } from 'react';
 import { ApiError, download, post, upload } from '../../api/client';
 import { Button } from '../../components/ui/Button';
 import { ConfirmDialog } from '../../components/ui/Dialog';
 import { Alert, ErrorAlert, Loading, StatusBadge } from '../../components/ui/Feedback';
-import { Checkbox, Field, SelectField } from '../../components/ui/Form';
+import { Checkbox, Field, SelectField, TextField } from '../../components/ui/Form';
 import { Card } from '../../components/ui/Layout';
 import { DataTable } from '../../components/ui/Table';
 import { useAuth } from '../../context/Auth';
 import { useToast } from '../../context/Toast';
 import { dateTime } from '../../lib/format';
 import { useApi } from '../../lib/hooks';
+import { COLUMN_TYPES } from './Columns';
+
+interface NewColumn { header: string; name: string; data_type: string; options: string }
 
 export function ImportExport() {
   const { notify } = useToast();
@@ -56,6 +59,8 @@ function ImportWizard({ onApplied }: { onApplied: () => void }) {
   const [info, setInfo] = useState<any>(null);
   const [sheet, setSheet] = useState('');
   const [columns, setColumns] = useState<Record<string, string>>({});
+  const [custom, setCustom] = useState<Record<string, string>>({});
+  const [newCols, setNewCols] = useState<NewColumn[]>([]);
   const [options, setOptions] = useState({ create_missing: true, update_catalog: true, adjust_stock: false });
   const [run, setRun] = useState<any>(null);
   const [error, setError] = useState<ApiError | null>(null);
@@ -73,6 +78,8 @@ function ImportWizard({ onApplied }: { onApplied: () => void }) {
       setInfo(data);
       setSheet(data.sheet);
       setColumns(data.suggested_columns);
+      setCustom(data.suggested_custom ?? {});
+      setNewCols([]);
     } catch (err) {
       setError(err as ApiError);
       setInfo(null);
@@ -88,7 +95,12 @@ function ImportWizard({ onApplied }: { onApplied: () => void }) {
     try {
       const form = new FormData();
       form.append('file', file);
-      form.append('options', JSON.stringify({ sheet, header_row: info.header_row, columns, ...options }));
+      const extra = [
+        ...Object.entries(custom).filter(([, h]) => h).map(([id, header]) => ({ column_id: Number(id), header })),
+        ...newCols.map((n) => ({ header: n.header, new: { name: n.name.trim(), data_type: n.data_type,
+          options: n.data_type === 'lista' ? n.options.split(',').map((o) => o.trim()).filter(Boolean) : undefined } })),
+      ];
+      form.append('options', JSON.stringify({ sheet, header_row: info.header_row, columns, custom: extra, ...options }));
       setRun(await upload('/imports/preview', form));
     } catch (err) {
       setError(err as ApiError);
@@ -101,8 +113,17 @@ function ImportWizard({ onApplied }: { onApplied: () => void }) {
     setFile(null);
     setInfo(null);
     setRun(null);
+    setError(null);
     onApplied();
   };
+  // Cada columna del archivo se puede usar una sola vez.
+  const used = [...Object.values(columns), ...Object.values(custom), ...newCols.map((n) => n.header)].filter(Boolean);
+  const twice = [...new Set(used.filter((h, i) => used.indexOf(h) !== i))];
+  const free: string[] = (info?.headers ?? []).filter((h: string) => h && !used.includes(h) && !(info?.duplicate_headers ?? []).includes(h));
+  const incomplete = newCols.some((n) => !n.header || !n.name.trim() || (n.data_type === 'lista' && !n.options.trim()));
+  const headerOptions = (info?.headers ?? []).filter(Boolean).map((h: string) => ({ value: h, label: h }));
+  const addColumn = (header = '') => setNewCols((c) => [...c, { header, name: header, data_type: 'texto', options: '' }]);
+  const setNew = (i: number, patch: Partial<NewColumn>) => setNewCols((c) => c.map((n, j) => (j === i ? { ...n, ...patch } : n)));
 
   return (
     <Card title="Importar desde Excel o CSV">
@@ -126,6 +147,26 @@ function ImportWizard({ onApplied }: { onApplied: () => void }) {
               <SelectField label="Hoja" value={sheet} onChange={(v) => { setSheet(v); if (file) void inspect(file, v); }}
                 options={info.sheets.map((s: string) => ({ value: s, label: s }))} />
             )}
+            {info.sample?.length > 0 && (
+              <details open>
+                <summary style={{ cursor: 'pointer', fontWeight: 700, minHeight: 44, display: 'flex', alignItems: 'center' }}>
+                  Primeras filas del archivo</summary>
+                <div className="table-wrap" style={{ maxHeight: 280, overflow: 'auto' }}>
+                  <table className="table">
+                    <caption className="sr-only">Primeras filas del archivo</caption>
+                    <thead><tr>{info.headers.map((h: string, i: number) => <th key={i} scope="col">{h || <span className="muted">(sin nombre)</span>}</th>)}</tr></thead>
+                    <tbody>{info.sample.map((row: any[], i: number) => (
+                      <tr key={i}>{info.headers.map((_: string, j: number) => <td key={j}><span className="cell-clip">{String(row[j] ?? '')}</span></td>)}</tr>))}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            )}
+            {info.duplicate_headers?.length > 0 && (
+              <Alert kind="warning" title="Encabezados repetidos">
+                {info.duplicate_headers.join(', ')}: aparece(n) más de una vez. Esas columnas no se pueden importar; renómbrelas en el archivo.
+              </Alert>
+            )}
             <fieldset>
               <legend>Correspondencia de columnas</legend>
               <div className="form-grid">
@@ -136,6 +177,43 @@ function ImportWizard({ onApplied }: { onApplied: () => void }) {
                 ))}
               </div>
             </fieldset>
+            {info.custom_columns?.length > 0 && (
+              <fieldset>
+                <legend>Columnas adicionales del inventario</legend>
+                <div className="custom-map">
+                  {info.custom_columns.map((c: any) => (
+                    <SelectField key={c.id} label={c.name} value={custom[c.id] ?? ''} placeholder="(no importar)" options={headerOptions}
+                      onChange={(v) => setCustom((x) => ({ ...x, [c.id]: v }))}
+                      hint={`${COLUMN_TYPES[c.data_type]}${c.required ? ` · obligatoria (si no se importa: «${c.default_value}»)` : ''}`} />
+                  ))}
+                </div>
+              </fieldset>
+            )}
+            {info.can_create_columns && (
+              <fieldset className="stack">
+                <legend>Agregar columnas nuevas</legend>
+                <p className="muted" style={{ margin: 0 }}>Puede agregar al inventario columnas que vienen en el archivo (por ejemplo, Marca o
+                  Ubicación). Se crean solo al aplicar la importación: si la cancela, no queda nada.</p>
+                {newCols.map((n, i) => (
+                  <div key={i} className="new-column-row">
+                    <SelectField label="Columna del archivo" value={n.header} placeholder="Elija…" options={headerOptions}
+                      onChange={(v) => setNew(i, { header: v, name: n.name || v })} required />
+                    <TextField label="Nombre en el inventario" value={n.name} maxLength={60} required onChange={(v) => setNew(i, { name: v })} />
+                    <SelectField label="Tipo de dato" value={n.data_type} onChange={(v) => setNew(i, { data_type: v })}
+                      options={Object.entries(COLUMN_TYPES).map(([value, label]) => ({ value, label }))} />
+                    {n.data_type === 'lista' && <TextField label="Opciones (separadas por coma)" value={n.options} required
+                      onChange={(v) => setNew(i, { options: v })} />}
+                    <Button variant="ghost" icon={<X size={18} />} onClick={() => setNewCols((c) => c.filter((_, j) => j !== i))}>Quitar</Button>
+                  </div>
+                ))}
+                <div className="row" style={{ gap: 8 }}>
+                  {free.slice(0, 12).map((h) => (
+                    <Button key={h} size="sm" variant="outline" icon={<Plus size={16} />} onClick={() => addColumn(h)}>{h}</Button>))}
+                  <Button size="sm" icon={<Plus size={16} />} onClick={() => addColumn()}>Agregar columna</Button>
+                </div>
+              </fieldset>
+            )}
+            {twice.length > 0 && <Alert kind="danger">Cada columna del archivo se puede usar una sola vez. Repetida(s): {twice.join(', ')}.</Alert>}
             <fieldset>
               <legend>Qué hacer</legend>
               <Checkbox label="Crear los productos que no existen" checked={options.create_missing}
@@ -149,7 +227,9 @@ function ImportWizard({ onApplied }: { onApplied: () => void }) {
               )}
             </fieldset>
             <div className="form-actions">
-              <Button variant="primary" busy={busy} icon={<Upload size={20} />} onClick={preview}>Ver vista previa</Button>
+              <Button onClick={reset}>Cancelar</Button>
+              <Button variant="primary" busy={busy} icon={<Upload size={20} />} onClick={preview} disabled={twice.length > 0 || incomplete}>
+                Ver vista previa</Button>
             </div>
           </>
         )}
@@ -208,6 +288,9 @@ export function ImportPreview({ run, onDone }: { run: any; onDone: () => void })
           <div key={k} className="card metric"><span className="metric-label">{label}</span><span className="metric-value">{counts[k] ?? 0}</span></div>
         ))}
       </div>
+      {(s.warnings ?? []).map((w: string) => <Alert key={w} kind="warning">{w}</Alert>)}
+      {s.will?.new_columns?.length > 0 && pending && (
+        <Alert kind="info" title="Columnas nuevas">Al aplicar se agregarán al inventario: {s.will.new_columns.join(', ')}.</Alert>)}
       {counts.stock_differences > 0 && (
         <Alert kind={s.will.adjust_stock ? 'warning' : 'info'} title="Existencias">
           {s.will.adjust_stock
@@ -237,6 +320,7 @@ export function ImportPreview({ run, onDone }: { run: any; onDone: () => void })
       ) : null))}
       {s.applied && (
         <Alert kind={s.applied.errors.length ? 'warning' : 'success'} title="Resultado">
+          {s.applied.columns_created?.length > 0 && <>Columnas agregadas: {s.applied.columns_created.join(', ')} · </>}
           {s.applied.created} creados · {s.applied.updated} actualizados · {s.applied.stock_adjusted} existencias ajustadas ·
           {' '}{s.applied.stock_reported} diferencias informadas · {s.applied.skipped} omitidos · {s.applied.errors.length} errores
           {s.applied.errors.length > 0 && <ul>{s.applied.errors.slice(0, 10).map((e: any) => <li key={e.row}>Fila {e.row} ({e.code}): {e.error}</li>)}</ul>}
@@ -261,7 +345,8 @@ export function ImportPreview({ run, onDone }: { run: any; onDone: () => void })
 }
 
 function describe(key: string, r: any): string {
-  if (key === 'new') return `${r.description} · precio ${r.price} · cantidad ${r.stock}`;
+  if (key === 'new') return [`${r.description} · precio ${r.price} · cantidad ${r.stock}`,
+    ...Object.entries(r.custom ?? {}).map(([k, v]) => `${k}: ${v}`)].join(' · ');
   if (key === 'changes') return Object.entries(r.fields).map(([f, v]: [string, any]) => `${f}: ${v.antes ?? '—'} → ${v.despues}`).join(' · ');
   if (key === 'stock_differences') return `POS-PY ${r.local} · fuente ${r.external} (diferencia ${r.difference})`;
   if (key === 'cost_differences') return `POS-PY ${r.local} · fuente ${r.external}`;

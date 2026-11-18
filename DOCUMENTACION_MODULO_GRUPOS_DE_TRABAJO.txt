@@ -230,3 +230,14 @@ distintos (por ejemplo, un teléfono Android con datos móviles).
 - Los empleados necesitan una cuenta creada por el administrador; el enlace no crea cuentas.
 - La detección de «local» no cubre un reenvío que reescriba el Host a localhost y no agregue
   cabeceras de proxy. No configure el proxy o túnel de esa forma.
+
+
+13. TAREAS DEL GRUPO (18-11-2026)
+--------------------------------------------------------------------------------
+- La página de cada grupo incluye un tablero de tareas:
+  - el administrador lo ve como «Tareas del grupo»;
+  - cada integrante lo ve como «Mis tareas en este grupo».
+- El administrador dueño del grupo asigna tareas a uno o varios integrantes activos.
+- El administrador sigue el estado individual de cada responsable en vivo, por el mismo canal SSE.
+- Quien sale del grupo, o es retirado, deja de ver las tareas del grupo.
+- Detalle, permisos y pruebas: DOCUMENTACION_COLUMNAS_INVENTARIO_Y_TAREAS_DE_GRUPO.txt.

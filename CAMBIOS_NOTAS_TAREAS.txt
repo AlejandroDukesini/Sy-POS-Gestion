@@ -2,6 +2,17 @@ CAMBIOS — MÓDULO DE NOTAS Y TAREAS
 POS-PY · 17-11-2026
 ==========================================================================================
 
+ACTUALIZACIÓN 18-11-2026 (tareas de grupos de trabajo). Lo siguiente reemplaza lo que dice más abajo:
+- Una tarea asignada puede tener VARIOS responsables, cada uno con su estado individual. También
+  puede pertenecer a un grupo de trabajo, y entonces solo se asigna a integrantes de ese grupo.
+- Estado general: Pendiente, En progreso, En revisión, Completada o Cancelada. Pasa a «Completada»
+  solo cuando terminan todos los responsables.
+- Tiene prioridad (Baja, Media, Alta o Urgente), observaciones, comentarios, solicitudes de cambio
+  e historial.
+- Una tarea asignada solo se elimina si nadie registró avance ni comentarios; si no, se cancela.
+- Las notas y las tareas personales no cambian.
+Detalle: DOCUMENTACION_COLUMNAS_INVENTARIO_Y_TAREAS_DE_GRUPO.txt.
+
 1. PUNTO DE PARTIDA (inspección)
 ------------------------------------------------------------------------------------------
 - Backend FastAPI + SQLite con migraciones versionadas. Sesión por cookie HttpOnly, roles admin y

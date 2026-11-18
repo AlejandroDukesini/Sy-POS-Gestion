@@ -17,7 +17,9 @@ from ..models import (
     PasswordReset,
     PaymentMethod,
     Restore,
+    TaskComment,
     TaskIn,
+    TaskProgress,
     TaskUpdate,
     UserCreate,
     UserUpdate,
@@ -61,14 +63,25 @@ def unlock(user_id: int, current: Actor = Depends(actor), app: AppContext = Depe
 
 # ------------------------------------------------------------------ tareas de empleados
 @router.get("/tasks")
-def tasks(assignee_id: int | None = None, status: str = "", scope: str = "asignadas", current: Actor = Depends(actor),
+def tasks(assignee_id: int | None = None, status: str = "", scope: str = "asignadas", priority: str = "", group: str = "",
+          due_from: str = "", due_to: str = "", my_status: str = "", current: Actor = Depends(actor),
           app: AppContext = Depends(ctx)):
-    return app.tasks.list(current, assignee_id, status, scope)
+    return app.tasks.list(current, assignee_id, status, scope, priority, group, due_from, due_to, my_status)
 
 
 @router.get("/tasks/assignees")
 def task_assignees(current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
     return app.tasks.assignees(current)
+
+
+@router.get("/tasks/groups")
+def task_groups(current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    return app.tasks.groups(current)
+
+
+@router.get("/tasks/{task_id}")
+def get_task(task_id: int, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    return app.tasks.get(current, task_id)
 
 
 @router.post("/tasks")
@@ -79,6 +92,16 @@ def create_task(body: TaskIn, current: Actor = Depends(actor), app: AppContext =
 @router.put("/tasks/{task_id}")
 def update_task(task_id: int, body: TaskUpdate, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
     return app.tasks.update(current, task_id, body.data())
+
+
+@router.put("/tasks/{task_id}/mine")
+def my_task_status(task_id: int, body: TaskProgress, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    return app.tasks.set_my_status(current, task_id, body.status)
+
+
+@router.post("/tasks/{task_id}/comments")
+def comment_task(task_id: int, body: TaskComment, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    return app.tasks.comment(current, task_id, body.comment, body.request_change)
 
 
 @router.delete("/tasks/{task_id}")

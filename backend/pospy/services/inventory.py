@@ -19,6 +19,7 @@ from ..core.errors import ConflictError, NotFoundError, ValidationError
 from ..core.money import from_cents, from_milli, parse_decimal, round_cents, to_bp, to_cents, to_milli
 from ..core.query import like, paginate
 from . import ledger
+from .columns import ColumnService, typed
 from .ledger import Line
 from .open_items import AP, OpenItems
 
@@ -42,6 +43,7 @@ class InventoryService:
         self.db = db
         self.settings = settings
         self.payables = OpenItems(db, settings, AP)
+        self.columns = ColumnService(db)
 
     def _tz(self) -> str:
         return self.settings.get("empresa")["timezone"]
@@ -57,8 +59,10 @@ class InventoryService:
         elif status == "inactivos":
             where.append("p.active = 0")
         if q:
-            where.append("(p.code LIKE ? ESCAPE '\\' OR p.description LIKE ? ESCAPE '\\')")
-            params += [like(q.strip())] * 2
+            where.append("(p.code LIKE ? ESCAPE '\\' OR p.description LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM"
+                         " inventory_custom_values v JOIN inventory_columns ic ON ic.id = v.column_id WHERE v.product_id = p.id"
+                         " AND ic.active = 1 AND v.value LIKE ? ESCAPE '\\'))")
+            params += [like(q.strip())] * 3
         if category_id:
             where.append("p.category_id = ?")
             params.append(category_id)
@@ -73,7 +77,10 @@ class InventoryService:
                                   "code": "p.code COLLATE NOCASE", "description": "p.description COLLATE NOCASE",
                                   "price": "p.price_cents", "discount_price": "COALESCE(p.discount_price_cents, p.price_cents)",
                                   "cost": "p.cost_cents", "stock": "p.stock_milli", "updated_at": "p.updated_at"})
+            custom = self.columns.values_for(conn, [p["id"] for p in result["items"]])
         result["items"] = [self._public(actor, p) for p in result["items"]]
+        for p in result["items"]:
+            p["custom"] = custom.get(p["id"], {})
         return result
 
     @staticmethod
@@ -90,9 +97,12 @@ class InventoryService:
                                " cu.username AS created_by_name, uu.username AS updated_by_name FROM products p"
                                " LEFT JOIN categories c ON c.id = p.category_id LEFT JOIN users cu ON cu.id = p.created_by"
                                " LEFT JOIN users uu ON uu.id = p.updated_by WHERE p.id = ?", (product_id,)).fetchone()
-        if not row:
-            raise NotFoundError("Producto no encontrado.")
-        return self._public(actor, dict(row))
+            if not row:
+                raise NotFoundError("Producto no encontrado.")
+            custom = self.columns.values_for(conn, [product_id])[product_id]
+        product = self._public(actor, dict(row))
+        product["custom"] = custom
+        return product
 
     def lookup(self, actor: Actor, q: str, limit: int = 20) -> list[dict]:
         """Búsqueda rápida para vender o cotizar: coincidencia exacta de código primero."""
@@ -250,8 +260,11 @@ class InventoryService:
         product_id = conn.execute(
             f"INSERT INTO products({cols}, created_at, updated_at, created_by, updated_by)"
             f" VALUES ({', '.join('?' * len(values))}, ?, ?, ?, ?)", (*values.values(), now, now, actor.id, actor.id)).lastrowid
+        custom = self.columns.set_values_conn(conn, actor, product_id, data.get("custom"), creating=True,
+                                              keep_existing_on_empty=bool(data.get("_import")))
         record(conn, actor, "producto.crear", "product", product_id, {"codigo": values["code"],
-                                                                      "descripcion": values["description"]})
+                                                                      "descripcion": values["description"],
+                                                                      **({"columnas": custom} if custom else {})})
         return product_id
 
     def update(self, actor: Actor, product_id: int, data: dict) -> dict:
@@ -273,6 +286,11 @@ class InventoryService:
             raise ConflictError("Otra persona modificó este producto. Recargue para ver los cambios.")
         values = self._validated(conn, data, current)
         changes = {k: {"antes": current[k], "despues": v} for k, v in values.items() if current[k] != v}
+        if "custom" in data:
+            custom = self.columns.set_values_conn(conn, actor, product_id, data["custom"], creating=False,
+                                                  keep_existing_on_empty=bool(data.get("_import")))
+            if custom:
+                changes["columnas"] = custom
         if not changes:
             return {}
         sets = ", ".join(f"{k} = ?" for k in values)
@@ -437,9 +455,11 @@ class InventoryService:
         with self.db.read() as conn:
             rows = conn.execute("SELECT p.*, c.name AS category FROM products p LEFT JOIN categories c ON c.id = p.category_id"
                                 " ORDER BY p.code COLLATE NOCASE").fetchall()
+            extra = self.columns.columns_conn(conn)
+            custom = self.columns.values_for(conn, [r["id"] for r in rows])
         header = ["Código", "Descripción", "Categoría", "Unidad", "Precio sin descuento", "Precio con descuento"]
         header += ["Costo"] if include_cost else []
-        header += ["IVA %", "Cantidad disponible", "Existencia mínima", "Activo"]
+        header += ["IVA %", "Cantidad disponible", "Existencia mínima", "Activo"] + [c["name"] for c in extra]
         data = []
         for r in rows:
             line = [r["code"], r["description"], r["category"] or "", r["unit"], from_cents(r["price_cents"]),
@@ -447,6 +467,7 @@ class InventoryService:
             line += [from_cents(r["cost_cents"])] if include_cost else []
             line += [Decimal(r["tax_rate_bp"]) / 100, from_milli(r["stock_milli"]), from_milli(r["min_stock_milli"]),
                      "Sí" if r["active"] else "No"]
+            line += [typed(c, custom[r["id"]].get(str(c["id"]))) for c in extra]
             data.append(line)
         stamp = local_today(self._tz()).isoformat()
         with self.db.tx() as conn:
@@ -469,8 +490,11 @@ class InventoryService:
             cell.fill = PatternFill("solid", fgColor="1F2937")
         for line in data:
             ws.append([float(v) if isinstance(v, Decimal) else v for v in line])
-        for col, width in zip("ABCDEFGHIJK", (16, 44, 18, 9, 18, 18, 14, 9, 18, 16, 8), strict=False):
-            ws.column_dimensions[col].width = width
+        from openpyxl.utils import get_column_letter
+        widths = [16, 44, 18, 9, 18, 18] + ([14] if include_cost else []) + [9, 18, 16, 8]
+        widths += [40 if c["data_type"] == "texto_largo" else 18 for c in extra]
+        for i, width in enumerate(widths, start=1):
+            ws.column_dimensions[get_column_letter(i)].width = width
         ws.freeze_panes = "A2"
         out = io.BytesIO()
         wb.save(out)

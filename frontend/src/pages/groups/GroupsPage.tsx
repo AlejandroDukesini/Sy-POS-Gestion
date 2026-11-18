@@ -14,6 +14,7 @@ import { date, dateTime } from '../../lib/format';
 import { useApi } from '../../lib/hooks';
 import { useRealtimeEvents, useRealtimeStatus } from '../../lib/realtime';
 import { SettingsSection } from '../manage/Settings';
+import { TaskBoard } from '../tasks/TaskBoard';
 import { ConnectionBadge, eventText, GroupStatusBadge, InvitationBadge, MemberBadge, POLICY_LABEL } from './labels';
 
 export default function GroupsRoutes() {
@@ -245,6 +246,10 @@ function AdminView({ data, reload }: { data: any; reload: () => void }) {
         )}
       </Card>
 
+      <Card title="Tareas del grupo">
+        <div className="card-body"><TaskBoard kind="asignadas" group={g.public_id} /></div>
+      </Card>
+
       <Card title="Invitaciones por enlace" actions={active &&
         <Button variant="primary" icon={<Link2 size={18} />} onClick={() => setInviting(true)}>Generar enlace</Button>}>
         <div className="card-body stack">
@@ -426,6 +431,11 @@ function MemberView({ data }: { data: any }) {
               {data.members.map((m: any) => <li key={m.full_name + m.joined_at}>{m.full_name}{m.full_name === user?.full_name ? ' (usted)' : ''}</li>)}
             </ul>
           )}
+        </Card>
+      )}
+      {data.me.status === 'activo' && (
+        <Card title="Mis tareas en este grupo">
+          <div className="card-body"><TaskBoard kind="asignadas" group={g.public_id} /></div>
         </Card>
       )}
       <Card title="Funciones autorizadas">
