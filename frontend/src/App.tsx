@@ -56,7 +56,7 @@ function AuthenticatedApp() {
         <Route path="finanzas/*" element={<RequirePermission any={['finanzas.ver']}><FinanceRoutes /></RequirePermission>} />
         <Route path="gestion/*" element={<RequirePermission any={MANAGE_PERMS}><ManageRoutes /></RequirePermission>} />
         <Route path="configuracion/*" element={<SettingsPage />} />
-        <Route path="tareas" element={<TasksPage />} />
+        <Route path="tareas/*" element={<TasksPage />} />
         <Route path="grupos/*" element={<GroupsRoutes />} />
         <Route path="unirse/:token" element={<JoinPage />} />
         <Route path="*" element={<EmptyState title="Página no encontrada"><Link to="/" className="btn btn-outline">Ir al inicio</Link></EmptyState>} />

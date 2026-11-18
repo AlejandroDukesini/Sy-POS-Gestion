@@ -9,7 +9,7 @@ import { ConfirmDialog } from '../ui/Dialog';
 import { Loading } from '../ui/Feedback';
 import { UpdatePrompt } from './UpdatePrompt';
 
-export interface Section { to: string; label: string; icon: typeof Boxes; visible: boolean }
+export interface Section { to: string; label: string; short?: string; icon: typeof Boxes; visible: boolean }
 
 export function useSections(): Section[] {
   const { can, canAny } = useAuth();
@@ -19,7 +19,7 @@ export function useSections(): Section[] {
     { to: '/finanzas', label: 'Finanzas', icon: LineChart, visible: can('finanzas.ver') },
     { to: '/gestion', label: 'Gestión', icon: Briefcase, visible: canAny('gestion.usuarios', 'gestion.configuracion',
       'gestion.integraciones', 'gestion.respaldos', 'gestion.auditoria', 'terceros.gestionar') },
-    { to: '/tareas', label: 'Tareas', icon: ClipboardList, visible: true },
+    { to: '/tareas', label: 'Notas y tareas', short: 'Tareas', icon: ClipboardList, visible: true },
     { to: '/grupos', label: 'Grupos', icon: Users, visible: true },
   ].filter((s) => s.visible);
 }
@@ -27,7 +27,7 @@ export function useSections(): Section[] {
 const TITLES: [RegExp, string][] = [
   [/^\/inventario/, 'Inventario'], [/^\/vender\/documentos/, 'Cotizaciones y órdenes'], [/^\/vender\/historial/, 'Historial de ventas'],
   [/^\/vender/, 'Vender'], [/^\/finanzas/, 'Finanzas'], [/^\/gestion/, 'Gestión'], [/^\/configuracion/, 'Configuración'],
-  [/^\/tareas/, 'Tareas'], [/^\/grupos/, 'Grupos de trabajo'], [/^\/unirse/, 'Invitación'],
+  [/^\/tareas/, 'Notas y tareas'], [/^\/grupos/, 'Grupos de trabajo'], [/^\/unirse/, 'Invitación'],
 ];
 
 export function AppShell() {
@@ -57,10 +57,13 @@ export function AppShell() {
           <span className="brand-name">{company?.name ?? 'POS-PY'}</span>
         </Link>
         <nav className="nav">
-          {sections.map(({ to, label, icon: Icon }) => (
-            <NavLink key={to} to={to} className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}>
+          {sections.map(({ to, label, short, icon: Icon }) => (
+            <NavLink key={to} to={to} aria-label={short ? label : undefined}
+              className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}>
               <Icon size={26} aria-hidden />
-              <span className="nav-label">{label}</span>
+              {/* En el teléfono (barra inferior) se usa el rótulo corto, si existe. */}
+              <span className={`nav-label${short ? ' nav-full' : ''}`}>{label}</span>
+              {short && <span className="nav-label nav-short">{short}</span>}
             </NavLink>
           ))}
         </nav>

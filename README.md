@@ -29,6 +29,9 @@ negocio. Los datos se guardan localmente en SQLite; no requiere internet ni serv
   asesor, notas y pendientes, visitas, cotizaciones y lista de productos en Excel con versiones),
   categorías, métodos de pago, empresa, copias de seguridad con verificación y restauración,
   historial de actividad.
+- **Notas y tareas**: bloc de notas personal con búsqueda; tareas personales (privadas de cada
+  persona) y tareas que el administrador asigna a los empleados, con estados Pendiente, En progreso
+  y Completada. El administrador ve en vivo los cambios de estado.
 - **Grupos de trabajo**: el administrador crea grupos e invita empleados con un enlace (vigencia y
   cupo configurables, revocable, sin QR); cada empleado entra con su propia cuenta, desde cualquier
   dispositivo y red. Integrantes, solicitudes y estado de conexión se actualizan en vivo.
@@ -201,6 +204,9 @@ dependencias del backend), `BROWSER` (`msedge` o `chrome`, predeterminado `msedg
 Grupos de trabajo de extremo a extremo (servidor real, sesiones independientes, tiempo real):
 `backend\.venv\Scripts\python.exe scripts\groups_e2e.py [--public https://…]` y
 `node e2e/groups.mjs` (con `BASE` y `SETUP_BASE` para probar a través de un túnel).
+
+Notas y tareas con navegador real (administrador y dos empleados, y reinicio real del servidor):
+`npm run build; node e2e/notes-tasks.mjs`.
 
 ### Compilar la aplicación de escritorio
 

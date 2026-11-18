@@ -167,6 +167,18 @@ dialog.dialog::backdrop { background: var(--overlay); animation: fade-in var(--d
 }
 .note-item { border-bottom: 1px solid var(--border); padding-bottom: 10px; }
 .note-item:last-child { border-bottom: 0; }
+/* ---------------------------------------------------------------- notas y tareas (tarjetas) */
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: var(--gap); }
+.item-card { display: flex; flex-direction: column; gap: 10px; padding: 16px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow); min-width: 0; }
+.item-card-title { font-weight: 700; font-size: 1.0625rem; margin: 0; overflow-wrap: anywhere; }
+.item-card-text { color: var(--text-muted); margin: 0; white-space: pre-wrap; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.item-card-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; font-size: 0.875rem; color: var(--text-muted); }
+.item-card-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: auto; padding-top: 4px; }
+.item-card-actions:empty { display: none; }
+.item-card.done .item-card-title { text-decoration: line-through; color: var(--text-muted); }
+.overdue { color: var(--danger); font-weight: 700; }
 .print-only { display: none; }
 @media print { .print-only { display: block; } }
 

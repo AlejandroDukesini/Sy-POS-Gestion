@@ -277,8 +277,9 @@ def test_D_tasks_survive_employee_deactivation(ctx, admin, employee):
     assert [t["id"] for t in listed] == [task["id"]] and listed[0]["assignee_active"] == 0
     with pytest.raises(ValidationError):                            # no se asignan tareas nuevas a inactivos
         ctx.tasks.create(admin, {"title": "Otra", "assignee_id": employee.id})
-    with ctx.db.tx() as conn, pytest.raises(Exception):
-        conn.execute("DELETE FROM tasks")                           # las tareas no se borran
+    with pytest.raises(PermissionDenied):                           # el responsable no borra tareas asignadas
+        ctx.tasks.delete(employee, task["id"])
+    assert ctx.tasks.list(admin, assignee_id=employee.id)           # desactivar no borra sus tareas
 
 
 def test_D_employee_without_account_gets_one_later(ctx, admin):

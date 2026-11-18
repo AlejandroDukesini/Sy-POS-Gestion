@@ -153,9 +153,9 @@ describe('pantalla inicial según la configuración', () => {
 });
 
 describe('tareas', () => {
-  it('cualquier empleado ve la sección Tareas', async () => {
+  it('cualquier empleado ve la sección Notas y tareas', async () => {
     renderShell('employee', ['inventario.ver']);
-    expect(await screen.findByRole('link', { name: 'Tareas' })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Notas y tareas' })).toBeInTheDocument();
   });
 });
 

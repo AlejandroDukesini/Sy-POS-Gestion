@@ -22,6 +22,7 @@ from .routes import (
     financial_reports,
     groups,
     inventory,
+    notes,
     observations,
     sales,
     suppliers,
@@ -92,7 +93,7 @@ def create_app(ctx: AppContext, run_scheduler: bool = False) -> FastAPI:
         return {"status": "ok", "version": __version__, "schema": ctx.db.schema_version(), "desktop": ctx.config.desktop}
 
     # financial_reports va antes que finance: /finance/{kind} capturaría /finance/reports.
-    for module in (auth, inventory, observations, sales, documents, financial_reports, finance, admin, suppliers, groups):
+    for module in (auth, inventory, observations, sales, documents, financial_reports, finance, admin, suppliers, groups, notes):
         app.include_router(module.router, prefix="/api")
 
     _mount_frontend(app, ctx.config.web_dist)

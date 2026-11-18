@@ -69,8 +69,9 @@ class InvitationIn(Strict):
 class TaskIn(Strict):
     title: str = Field(max_length=200)
     description: str | None = Field(default="", max_length=2000)
-    assignee_id: int
+    assignee_id: int | None = None          # obligatorio en las asignadas; en las personales es quien la crea
     due_date: str | None = Field(default=None, max_length=10)
+    personal: bool = False
 
 
 class TaskUpdate(Strict):
@@ -78,7 +79,18 @@ class TaskUpdate(Strict):
     description: str | None = Field(default=None, max_length=2000)
     assignee_id: int | None = None
     due_date: str | None = Field(default=None, max_length=10)
-    status: Literal["pendiente", "en_curso", "completada", "cancelada"] | None = None
+    status: Literal["pendiente", "en_curso", "completada", "cancelada"] | None = None   # cancelada: solo tareas antiguas
+    version: int | None = None
+
+
+class NoteIn(Strict):
+    title: str | None = Field(default="", max_length=200)
+    content: str | None = Field(default="", max_length=20000)
+
+
+class NoteUpdate(NoteIn):
+    title: str | None = Field(default=None, max_length=200)
+    content: str | None = Field(default=None, max_length=20000)
     version: int | None = None
 
 

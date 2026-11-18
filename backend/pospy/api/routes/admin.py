@@ -61,8 +61,9 @@ def unlock(user_id: int, current: Actor = Depends(actor), app: AppContext = Depe
 
 # ------------------------------------------------------------------ tareas de empleados
 @router.get("/tasks")
-def tasks(assignee_id: int | None = None, status: str = "", current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
-    return app.tasks.list(current, assignee_id, status)
+def tasks(assignee_id: int | None = None, status: str = "", scope: str = "asignadas", current: Actor = Depends(actor),
+          app: AppContext = Depends(ctx)):
+    return app.tasks.list(current, assignee_id, status, scope)
 
 
 @router.get("/tasks/assignees")
@@ -78,6 +79,11 @@ def create_task(body: TaskIn, current: Actor = Depends(actor), app: AppContext =
 @router.put("/tasks/{task_id}")
 def update_task(task_id: int, body: TaskUpdate, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
     return app.tasks.update(current, task_id, body.data())
+
+
+@router.delete("/tasks/{task_id}")
+def delete_task(task_id: int, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    return app.tasks.delete(current, task_id)
 
 
 # ------------------------------------------------------------------ seguridad (inicio de sesión)

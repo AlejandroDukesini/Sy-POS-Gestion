@@ -16,7 +16,7 @@ import { useEffect, useRef, useState } from 'react';
 export type RealtimeStatus = 'conectando' | 'conectado' | 'reconectando' | 'desconectado';
 export interface RealtimeEvent { type: string; group?: string; user?: number; change?: string; [key: string]: unknown }
 
-const EVENT_TYPES = ['hola', 'grupo', 'presencia', 'cuenta', 'sesion', 'resync'];
+const EVENT_TYPES = ['hola', 'grupo', 'presencia', 'cuenta', 'sesion', 'tarea', 'resync'];
 const listeners = new Set<(e: RealtimeEvent) => void>();
 const statusListeners = new Set<(s: RealtimeStatus) => void>();
 let source: EventSource | null = null;

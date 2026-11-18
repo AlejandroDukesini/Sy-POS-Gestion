@@ -17,6 +17,7 @@ from .services.finance import FinanceService
 from .services.financial_reports import FinancialReportService
 from .services.groups import GroupService
 from .services.inventory import InventoryService
+from .services.notes import NoteService
 from .services.observations import ObservationService
 from .services.open_items import AP, AR, OpenItems
 from .services.prefs import PrefsService
@@ -43,7 +44,9 @@ class AppContext:
         self.access = AccessService(self.db)
         self.auth = AuthService(self.db, self.settings, config.data_dir, config.setup_code, self.access)
         self.users = UserService(self.db)
-        self.tasks = TaskService(self.db)
+        self.realtime = RealtimeHub()
+        self.tasks = TaskService(self.db, self.realtime)
+        self.notes = NoteService(self.db)
         self.suppliers = SupplierService(self.db, self.settings, config.data_dir)
         self.prefs = PrefsService(self.db)
         self.catalog = CatalogService(self.db)
@@ -58,7 +61,6 @@ class AppContext:
         self.reports = ReportService(self.db, self.settings)
         self.financial_reports = FinancialReportService(self.db, self.settings)
         self.backups = BackupService(self.db, self.settings, config.backups_dir)
-        self.realtime = RealtimeHub()
         self.groups = GroupService(self.db, self.realtime, config.public_url, self.settings)
         self.sync = SyncService(self.db, self.settings, self.secrets, self.inventory, config.imports_dir)
         self.auth.prepare_setup()
