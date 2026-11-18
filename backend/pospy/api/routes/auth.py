@@ -1,8 +1,6 @@
 """Instalación, sesión, identidad, permisos visibles y preferencias personales."""
 from __future__ import annotations
 
-import ipaddress
-
 from fastapi import APIRouter, Depends, Request, Response
 
 from ...context import AppContext
@@ -10,7 +8,7 @@ from ...core import permissions as perms
 from ...core.actor import Actor
 from ...core.errors import PermissionDenied
 from ...core.settings import PUBLIC_READ
-from ..deps import COOKIE, actor, actor_any, ctx, session_token
+from ..deps import COOKIE, actor, actor_any, ctx, is_https, is_local, session_token
 from ..models import ChangePassword, Login, OpenSession, Setup, SetupStart, SetupStep
 from ..serialize import out
 
@@ -18,16 +16,13 @@ router = APIRouter(tags=["sesión"])
 
 
 def _is_local(request: Request) -> bool:
-    host = request.client.host if request.client else ""
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return host in ("localhost", "testclient")
+    return is_local(request)
 
 
-def _set_session(app: AppContext, response: Response, token: str) -> None:
+def _set_session(app: AppContext, response: Response, token: str, request: Request) -> None:
     max_age = app.settings.get("seguridad")["session_max_hours"] * 3600
-    response.set_cookie(COOKIE, token, httponly=True, samesite="strict", secure=app.config.secure_cookies,
+    # Por HTTPS (directo o a través de un túnel/proxy local) la cookie siempre lleva Secure.
+    response.set_cookie(COOKIE, token, httponly=True, samesite="strict", secure=app.config.secure_cookies or is_https(request),
                         max_age=max_age, path="/")
 
 
@@ -62,7 +57,7 @@ def setup_start(body: SetupStart, request: Request, response: Response, app: App
     """Abre o retoma el asistente de configuración inicial sin exigir cuenta (local + código de instalación)."""
     _require_local(request, "La configuración inicial")
     result = app.auth.start_setup(body.code, request.headers.get("user-agent", ""))
-    _set_session(app, response, result.token)
+    _set_session(app, response, result.token, request)
     return {"user": _me(app, result.actor), "access": app.access.state()}
 
 
@@ -89,14 +84,14 @@ def profiles(request: Request, app: AppContext = Depends(ctx)):
 def open_session(body: OpenSession, request: Request, response: Response, app: AppContext = Depends(ctx)):
     _require_local(request, "El acceso directo")
     result = app.auth.open_session(body.user_id, request.headers.get("user-agent", ""))
-    _set_session(app, response, result.token)
+    _set_session(app, response, result.token, request)
     return {"user": _me(app, result.actor), "must_change_password": False}
 
 
 @router.post("/auth/login")
 def login(body: Login, request: Request, response: Response, app: AppContext = Depends(ctx)):
     result = app.auth.login(body.username, body.password, request.headers.get("user-agent", ""))
-    _set_session(app, response, result.token)
+    _set_session(app, response, result.token, request)
     return {"user": _me(app, result.actor), "must_change_password": result.must_change_password}
 
 

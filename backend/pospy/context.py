@@ -15,11 +15,13 @@ from .services.catalog import CatalogService
 from .services.documents import DocumentService
 from .services.finance import FinanceService
 from .services.financial_reports import FinancialReportService
+from .services.groups import GroupService
 from .services.inventory import InventoryService
 from .services.observations import ObservationService
 from .services.open_items import AP, AR, OpenItems
 from .services.prefs import PrefsService
 from .services.printing import PrintingService
+from .services.realtime import RealtimeHub
 from .services.reports import ReportService
 from .services.sales import SalesService
 from .services.suppliers import SupplierService
@@ -56,6 +58,8 @@ class AppContext:
         self.reports = ReportService(self.db, self.settings)
         self.financial_reports = FinancialReportService(self.db, self.settings)
         self.backups = BackupService(self.db, self.settings, config.backups_dir)
+        self.realtime = RealtimeHub()
+        self.groups = GroupService(self.db, self.realtime, config.public_url, self.settings)
         self.sync = SyncService(self.db, self.settings, self.secrets, self.inventory, config.imports_dir)
         self.auth.prepare_setup()
         self._stop = threading.Event()

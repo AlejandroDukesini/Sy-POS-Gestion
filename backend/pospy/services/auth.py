@@ -205,8 +205,12 @@ class AuthService:
                       iso(now + timedelta(hours=sec["session_max_hours"])), (client or "")[:120], int(open_mode)))
         return token, self._actor(conn, user)
 
-    def resolve(self, token: str | None) -> tuple[Actor, bool]:
-        """Devuelve (actor, debe_cambiar_contraseña) o lanza AuthError si la sesión no es válida."""
+    def resolve(self, token: str | None, touch: bool = True) -> tuple[Actor, bool]:
+        """Devuelve (actor, debe_cambiar_contraseña) o lanza AuthError si la sesión no es válida.
+
+        touch=False valida sin contar como actividad (lo usa el canal de tiempo real: una pestaña abierta
+        no debe impedir el cierre de sesión por inactividad).
+        """
         if not token:
             raise AuthError("Inicie sesión para continuar.")
         idle = timedelta(minutes=self.settings.get("seguridad")["session_idle_minutes"])
@@ -229,7 +233,7 @@ class AuthService:
                                         if closed else
                                         "La sesión fue cerrada por un cambio en la cuenta. Inicie sesión de nuevo.")
                 else:
-                    if (now - parse_iso(row["last_seen_at"])).total_seconds() > 30:
+                    if touch and (now - parse_iso(row["last_seen_at"])).total_seconds() > 30:
                         conn.execute("UPDATE sessions SET last_seen_at = ? WHERE id = ?", (iso(now), row["sid"]))
                     actor = self._actor(conn, row)
         if failure:

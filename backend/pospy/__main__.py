@@ -88,7 +88,8 @@ def main(argv: list[str] | None = None) -> None:
         watch_parent(args.parent_pid)
     ctx = AppContext(config)
     app = create_app(ctx, run_scheduler=True)
-    uvicorn.run(app, host=config.host, port=config.port, log_config=None, workers=1, access_log=False)
+    uvicorn.run(app, host=config.host, port=config.port, log_config=None, workers=1, access_log=False,
+                timeout_graceful_shutdown=3)   # los canales de tiempo real abiertos no bloquean el cierre
 
 
 if __name__ == "__main__":

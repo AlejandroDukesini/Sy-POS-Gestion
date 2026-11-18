@@ -1,8 +1,9 @@
-import { Boxes, Briefcase, ClipboardList, LineChart, LogOut, Settings, ShoppingCart, WifiOff } from 'lucide-react';
+import { Boxes, Briefcase, ClipboardList, LineChart, LogOut, Settings, ShoppingCart, Users, WifiOff } from 'lucide-react';
 import { Suspense, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/Auth';
 import { useOnline } from '../../lib/hooks';
+import { useRealtimeConnection, useRealtimeEvents } from '../../lib/realtime';
 import { Button } from '../ui/Button';
 import { ConfirmDialog } from '../ui/Dialog';
 import { Loading } from '../ui/Feedback';
@@ -19,17 +20,21 @@ export function useSections(): Section[] {
     { to: '/gestion', label: 'Gestión', icon: Briefcase, visible: canAny('gestion.usuarios', 'gestion.configuracion',
       'gestion.integraciones', 'gestion.respaldos', 'gestion.auditoria', 'terceros.gestionar') },
     { to: '/tareas', label: 'Tareas', icon: ClipboardList, visible: true },
+    { to: '/grupos', label: 'Grupos', icon: Users, visible: true },
   ].filter((s) => s.visible);
 }
 
 const TITLES: [RegExp, string][] = [
   [/^\/inventario/, 'Inventario'], [/^\/vender\/documentos/, 'Cotizaciones y órdenes'], [/^\/vender\/historial/, 'Historial de ventas'],
   [/^\/vender/, 'Vender'], [/^\/finanzas/, 'Finanzas'], [/^\/gestion/, 'Gestión'], [/^\/configuracion/, 'Configuración'],
-  [/^\/tareas/, 'Tareas'],
+  [/^\/tareas/, 'Tareas'], [/^\/grupos/, 'Grupos de trabajo'], [/^\/unirse/, 'Invitación'],
 ];
 
 export function AppShell() {
-  const { user, company, logout, directSession, access } = useAuth();
+  const { user, company, logout, directSession, access, refresh } = useAuth();
+  // Canal de tiempo real mientras haya sesión: grupos, presencia y cambios en la propia cuenta.
+  useRealtimeConnection(true);
+  useRealtimeEvents((e) => { if (e.type === 'cuenta' || e.type === 'sesion') void refresh(); });
   const direct = directSession && Boolean(access?.setup_completed) && !access?.login_enabled;
   const sections = useSections();
   const online = useOnline();

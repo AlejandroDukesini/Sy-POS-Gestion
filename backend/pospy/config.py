@@ -27,6 +27,7 @@ class Config:
     setup_code: str = ""          # código de instalación inyectado por el escritorio (Tauri)
     master_key: str = ""          # alternativa a DPAPI para cifrar secretos fuera de Windows
     desktop: bool = False
+    public_url: str = ""         # origen público (https://…) para los enlaces de invitación
     extra: dict = field(default_factory=dict)
 
     @property
@@ -72,6 +73,7 @@ class Config:
             setup_code=env.get("POS_SETUP_CODE", ""),
             master_key=env.get("POS_MASTER_KEY", ""),
             desktop=_bool(env.get("POS_DESKTOP"), False),
+            public_url=env.get("POS_PUBLIC_URL", "").strip().rstrip("/"),
         )
         values.update(overrides)
         if isinstance(values["data_dir"], str):

@@ -29,6 +29,9 @@ negocio. Los datos se guardan localmente en SQLite; no requiere internet ni serv
   asesor, notas y pendientes, visitas, cotizaciones y lista de productos en Excel con versiones),
   categorías, métodos de pago, empresa, copias de seguridad con verificación y restauración,
   historial de actividad.
+- **Grupos de trabajo**: el administrador crea grupos e invita empleados con un enlace (vigencia y
+  cupo configurables, revocable, sin QR); cada empleado entra con su propia cuenta, desde cualquier
+  dispositivo y red. Integrantes, solicitudes y estado de conexión se actualizan en vivo.
 - **Integraciones**: sincronización de inventario desde OneDrive, Google Drive o una carpeta de red.
 - **Preferencias por usuario**: tema, tamaño de texto, densidad, alto contraste, animaciones reducidas.
 
@@ -160,6 +163,7 @@ Variables de entorno del backend:
 | `POS_CORS_ORIGINS` | Orígenes permitidos, separados por comas, si la interfaz se sirve desde otro origen | vacío |
 | `POS_MASTER_KEY` | Clave para cifrar credenciales fuera de Windows (en Windows se usa DPAPI) | vacío |
 | `POS_SETUP_CODE` | Código de instalación inyectado (lo usa el escritorio) | vacío |
+| `POS_PUBLIC_URL` | Dirección pública HTTPS con la que se arman los enlaces de invitación (también se puede fijar en Gestión › Configuración › Grupos de trabajo) | vacío |
 
 La configuración del negocio (empresa, IVA, impresión, sesiones, copias, integraciones) se hace
 desde **Gestión** y se guarda en la base de datos. Los secretos se guardan cifrados y nunca se
@@ -168,6 +172,13 @@ envían a la interfaz.
 **Red local**: por defecto solo escucha en el propio equipo. Para usarlo desde otros equipos,
 publíquelo detrás de un proxy inverso con HTTPS, con `POS_HOST=0.0.0.0` solo en una red de
 confianza y `POS_SECURE_COOKIES=1`. Use un único proceso y no ponga la base SQLite en una carpeta de red.
+
+**Grupos de trabajo por Internet**: los empleados deben poder abrir la aplicación desde fuera, así
+que el servidor tiene que estar publicado con HTTPS (proxy inverso, servidor en la nube o túnel con
+nombre). Defina `POS_PUBLIC_URL` con esa dirección. El tiempo real usa Server-Sent Events: el proxy
+no debe almacenar las respuestas `text/event-stream` (en nginx, `proxy_buffering off`). Los túneles
+rápidos de Cloudflare (`trycloudflare.com`) sí las almacenan; la interfaz lo detecta y recarga cada
+10 s. Detalles en `DOCUMENTACION_MODULO_GRUPOS_DE_TRABAJO.txt`.
 
 ### Pruebas
 
@@ -186,6 +197,10 @@ npm run build; npm run e2e   # navegador real contra el servidor real
 `npm run e2e` arranca un servidor con datos temporales. Variables: `PYTHON` (intérprete con las
 dependencias del backend), `BROWSER` (`msedge` o `chrome`, predeterminado `msedge`), `SHOTS`
 (carpeta de capturas).
+
+Grupos de trabajo de extremo a extremo (servidor real, sesiones independientes, tiempo real):
+`backend\.venv\Scripts\python.exe scripts\groups_e2e.py [--public https://…]` y
+`node e2e/groups.mjs` (con `BASE` y `SETUP_BASE` para probar a través de un túnel).
 
 ### Compilar la aplicación de escritorio
 

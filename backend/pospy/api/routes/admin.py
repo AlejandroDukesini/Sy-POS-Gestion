@@ -41,7 +41,10 @@ def create_user(body: UserCreate, current: Actor = Depends(actor), app: AppConte
 
 @router.put("/users/{user_id}")
 def update_user(user_id: int, body: UserUpdate, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
-    return app.users.update(current, user_id, body.data())
+    result = app.users.update(current, user_id, body.data())
+    # Avisa en vivo a la persona afectada (permisos, rol o estado): su interfaz se actualiza sin recargar.
+    app.realtime.publish([user_id], {"type": "cuenta"})
+    return result
 
 
 @router.post("/users/{user_id}/password")

@@ -47,6 +47,7 @@ CATALOG: tuple[Permission, ...] = (
     Permission("gestion.integraciones", "Conexiones y sincronización de inventario", "Gestión", admin_only=True),
     Permission("gestion.respaldos", "Copias de seguridad y restauración", "Gestión", admin_only=True),
     Permission("gestion.auditoria", "Historial de actividad", "Gestión", admin_only=True),
+    Permission("grupos.gestionar", "Crear grupos de trabajo e invitar empleados por enlace", "Gestión", admin_only=True),
 )
 
 BY_CODE = {p.code: p for p in CATALOG}

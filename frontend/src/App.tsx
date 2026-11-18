@@ -1,6 +1,6 @@
 import { Lock } from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from 'react';
-import { BrowserRouter, Link, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { get } from './api/client';
 import { AppShell, useSections } from './components/layout/AppShell';
 import { EmptyState, Loading } from './components/ui/Feedback';
@@ -19,6 +19,8 @@ const ManageRoutes = lazy(() => import('./pages/manage/ManageRoutes'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 const SetupWizard = lazy(() => import('./pages/SetupWizard').then((m) => ({ default: m.SetupWizard })));
 const TasksPage = lazy(() => import('./pages/tasks/TasksPage'));
+const GroupsRoutes = lazy(() => import('./pages/groups/GroupsPage'));
+const JoinPage = lazy(() => import('./pages/groups/JoinPage'));
 
 /** La interfaz oculta lo no autorizado por comodidad; la autorización real la hace el backend. */
 export function RequirePermission({ any, children }: { any: string[]; children: ReactNode }) {
@@ -55,6 +57,8 @@ function AuthenticatedApp() {
         <Route path="gestion/*" element={<RequirePermission any={MANAGE_PERMS}><ManageRoutes /></RequirePermission>} />
         <Route path="configuracion/*" element={<SettingsPage />} />
         <Route path="tareas" element={<TasksPage />} />
+        <Route path="grupos/*" element={<GroupsRoutes />} />
+        <Route path="unirse/:token" element={<JoinPage />} />
         <Route path="*" element={<EmptyState title="Página no encontrada"><Link to="/" className="btn btn-outline">Ir al inicio</Link></EmptyState>} />
       </Route>
     </Routes>
@@ -69,6 +73,11 @@ function AuthenticatedApp() {
  */
 function Gate() {
   const { status, mustChangePassword, user, access } = useAuth();
+  const location = useLocation();
+  // Enlace de invitación abierto sin sesión: se pide ingresar y, al hacerlo, la misma dirección muestra la invitación.
+  const inviteNotice = location.pathname.startsWith('/unirse/')
+    ? 'Le invitaron a un grupo de trabajo. Inicie sesión con su cuenta para ver la invitación; si no tiene cuenta, pídala al administrador.'
+    : undefined;
   const [setup, setSetup] = useState<SetupStatus | null>(null);
   const checkSetup = useCallback(() => {
     get<SetupStatus>('/setup/status').then(setSetup).catch(() => setSetup({ needs_setup: false } as SetupStatus));
@@ -83,7 +92,7 @@ function Gate() {
     }
     if (status === 'anonymous') return <SetupPage status={setup} />;
   }
-  if (status === 'anonymous') return setup.direct_access ? <ProfilesPage /> : <LoginPage />;
+  if (status === 'anonymous') return setup.direct_access ? <ProfilesPage /> : <LoginPage notice={inviteNotice} />;
   if (mustChangePassword) return <ChangePasswordPage />;
   return <AuthenticatedApp />;
 }

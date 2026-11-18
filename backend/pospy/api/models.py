@@ -46,6 +46,26 @@ class LoginToggle(Strict):
     enabled: bool
 
 
+class GroupIn(Strict):
+    name: str = Field(max_length=80)
+    description: str | None = Field(default="", max_length=500)
+    join_policy: Literal["automatica", "aprobacion"] = "automatica"
+    members_visible: bool = True
+
+
+class GroupUpdate(Strict):
+    name: str | None = Field(default=None, max_length=80)
+    description: str | None = Field(default=None, max_length=500)
+    join_policy: Literal["automatica", "aprobacion"] | None = None
+    members_visible: bool | None = None
+    version: int | None = None
+
+
+class InvitationIn(Strict):
+    expires_in_hours: int = Field(default=72, ge=1, le=720)
+    max_uses: int = Field(default=10, ge=1, le=500)
+
+
 class TaskIn(Strict):
     title: str = Field(max_length=200)
     description: str | None = Field(default="", max_length=2000)

@@ -43,6 +43,19 @@ def _email(value: str) -> str | None:
     return None if not value or re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value) else "Correo no válido."
 
 
+def _public_url(value: str) -> str | None:
+    """Origen público con el que se arman los enlaces de invitación a grupos de trabajo."""
+    from urllib.parse import urlsplit
+    if not value:
+        return None
+    parts = urlsplit(value)
+    if parts.scheme not in ("https", "http") or not parts.hostname or parts.path not in ("", "/") or parts.query:
+        return "Escriba solo el origen, por ejemplo https://pos.miempresa.com"
+    if parts.scheme == "http" and parts.hostname not in ("localhost", "127.0.0.1"):
+        return "Use HTTPS: los enlaces de invitación viajan por Internet."
+    return None
+
+
 SCHEMA: dict[str, dict[str, Field]] = {
     "empresa": {
         "name": Field("str", "Mi empresa", "Nombre comercial", max_len=120),
@@ -93,6 +106,10 @@ SCHEMA: dict[str, dict[str, Field]] = {
         "week_start": Field("choice", "lunes", "Primer día de la semana del negocio (el cierre semanal es el día anterior)",
                             choices=("lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo")),
     },
+    "grupos": {
+        "public_url": Field("str", "", "Dirección pública (HTTPS) para los enlaces de invitación", max_len=200,
+                            check=_public_url),
+    },
     "respaldos": {
         "auto_daily": Field("bool", True, "Copia automática diaria"),
         "keep": Field("int", 30, "Copias que se conservan", minimum=3, maximum=365),
@@ -107,6 +124,7 @@ SCHEMA: dict[str, dict[str, Field]] = {
 SECTION_LABELS = {
     "empresa": "Empresa", "ventas": "Ventas", "inventario": "Parámetros de inventario",
     "impresion": "Impresión de comprobantes", "proveedores": "Expediente de proveedores", "informes": "Informes financieros", "seguridad": "Sesiones y seguridad",
+    "grupos": "Grupos de trabajo",
     "respaldos": "Copias de seguridad", "oauth": "Credenciales de integraciones",
 }
 # Secciones que cualquier usuario autenticado puede leer (necesarias para operar la interfaz).
