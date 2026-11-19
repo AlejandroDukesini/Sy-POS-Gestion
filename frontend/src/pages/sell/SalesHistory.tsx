@@ -14,6 +14,7 @@ import { date, dateTime, money, qty, toApiNumber } from '../../lib/format';
 import { useApi, useDebounced } from '../../lib/hooks';
 import { CONDITION_LABELS } from '../inventory/returnLabels';
 import { printReceipt } from './receipt';
+import { TemplatePdfButton } from './TemplatePdf';
 
 export function SalesHistory() {
   const navigate = useNavigate();
@@ -120,6 +121,8 @@ export function SaleDetail() {
           <Button variant="primary" busy={busy} icon={<Printer size={20} />} onClick={reprint}>
             {s.prints ? 'Reimprimir' : 'Imprimir'} comprobante
           </Button>
+          <TemplatePdfButton target="venta" id={s.id} kind="venta" />
+          <TemplatePdfButton target="venta" id={s.id} kind="recibo" label="Recibo con plantilla" />
           {can('ventas.anular') && s.status === 'completada' && returnable && (
             <Button variant="outline" icon={<Undo2 size={20} />} onClick={() => setReturning(true)}>Devolución</Button>
           )}

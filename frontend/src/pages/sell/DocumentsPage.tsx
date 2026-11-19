@@ -12,6 +12,7 @@ import { useAuth } from '../../context/Auth';
 import { useToast } from '../../context/Toast';
 import { date, dateTime, money, toApiNumber } from '../../lib/format';
 import { useApi, useDebounced, useOnline } from '../../lib/hooks';
+import { TemplatePdfButton } from './TemplatePdf';
 import { addToCart, CartTable, CustomerPicker, printInBrowser, ProductSearch, StockWarnings, TotalsBox, useQuote, type CartLine, type Customer } from './Cart';
 
 export default function DocumentsPage() {
@@ -275,6 +276,7 @@ function DocumentDetail() {
           )}
           <Button variant="outline" busy={busy === 'file'} icon={<Download size={20} />} onClick={() => fetchFile('file')}>Excel</Button>
           {preview?.direct_print && <Button variant="outline" busy={busy === 'pdf'} icon={<FileDown size={20} />} onClick={() => fetchFile('pdf')}>PDF</Button>}
+          <TemplatePdfButton target="documento" id={d.id} kind="documento" documentTypeId={d.type_id} />
           {can('documentos.crear') && active && (
             <Button variant="outline" icon={<Pencil size={20} />} onClick={() => navigate(`/vender/documentos/${id}/editar`)}>Editar</Button>
           )}

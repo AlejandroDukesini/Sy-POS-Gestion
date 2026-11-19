@@ -128,7 +128,7 @@ try {
   await empCtx.setOffline(false);
   const emp2 = await empCtx.newPage();
   await emp2.goto(`${base}/grupos`);
-  await emp2.getByText('Turno tarde').waitFor();
+  await emp2.getByRole('link', { name: /Turno tarde/ }).waitFor();
   await row.getByText('Conectado').waitFor({ timeout: 20000 });
   check(true, 'F  Ana vuelve con su misma sesión: «Conectado», sin duplicados');
   check(await admin.getByRole('row', { name: /Ana Caja/ }).count() === 1, 'F  Una sola fila para Ana');
