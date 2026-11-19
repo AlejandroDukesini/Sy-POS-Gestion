@@ -77,6 +77,7 @@ class DocumentService:
         self.templates_dir: Path = config.templates_dir
         self.output_dir: Path = config.output_dir
         self.printing = printing
+        self.print_templates = None   # lo asigna AppContext (PrintTemplateService)
 
     def _tz(self) -> str:
         return self.settings.get("empresa")["timezone"]
@@ -499,6 +500,11 @@ class DocumentService:
                 "direct_print": com_excel.com_available()}
 
     def pdf(self, actor: Actor, doc_id: int) -> Path:
+        # Plantilla de impresión nueva (motor propio, sin Excel) si el tipo tiene una predeterminada.
+        if self.print_templates is not None:
+            result = self.print_templates.render_document(actor, doc_id, required=False)
+            if result:
+                return result["path"]
         path = self.generate(actor, doc_id)
         return com_excel.export_pdf(path, path.with_suffix(".pdf"))
 

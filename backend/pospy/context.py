@@ -21,6 +21,7 @@ from .services.notes import NoteService
 from .services.observations import ObservationService
 from .services.open_items import AP, AR, OpenItems
 from .services.prefs import PrefsService
+from .services.print_templates import PrintTemplateService
 from .services.printing import PrintingService
 from .services.realtime import RealtimeHub
 from .services.reports import ReportService
@@ -57,6 +58,8 @@ class AppContext:
         self.sales = SalesService(self.db, self.settings, self.inventory)
         self.printing = PrintingService(self.db, self.settings, self.sales)
         self.documents = DocumentService(self.db, self.settings, config, self.printing, self.scopes)
+        self.print_templates = PrintTemplateService(self.db, self.settings, config, self.scopes)
+        self.documents.print_templates = self.print_templates
         self.receivables = OpenItems(self.db, self.settings, AR)
         self.payables = OpenItems(self.db, self.settings, AP)
         self.finance = FinanceService(self.db, self.settings)
