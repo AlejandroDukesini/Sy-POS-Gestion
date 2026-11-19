@@ -9,6 +9,7 @@ import { Checkbox, SelectField, TextField } from '../../components/ui/Form';
 import { Card, LinkTabs, Metric, PageHeader } from '../../components/ui/Layout';
 import { DataTable, Pagination, type Column } from '../../components/ui/Table';
 import { useAuth } from '../../context/Auth';
+import { useInventory } from '../../context/Inventory';
 import { useToast } from '../../context/Toast';
 import { dateTime, money, pct, qty } from '../../lib/format';
 import { useApi, useDebounced, useOnline } from '../../lib/hooks';
@@ -29,19 +30,21 @@ export interface Product {
 
 export default function InventoryPage() {
   const { can } = useAuth();
+  const { current } = useInventory();
   return (
     <>
-      <PageHeader title="Inventario" description="Consulte existencias y registre entradas, salidas y ajustes." />
+      <PageHeader title={current ? `Inventario · ${current.name}` : 'Inventario'}
+        description="Consulte existencias y registre entradas, salidas y ajustes. Todos los integrantes trabajan sobre este mismo inventario." />
       <LinkTabs label="Secciones de inventario" tabs={[
         { to: '/inventario', label: 'Productos', end: true },
-        { to: '/inventario/movimientos', label: 'Movimientos' },
+        { to: '/inventario/movimientos', label: 'Movimientos de inventario' },
         ...(can('observaciones.ver') ? [{ to: '/inventario/observaciones', label: 'Observaciones' }] : []),
         ...(can('inventario.importar') ? [{ to: '/inventario/importar', label: 'Importar y exportar' }] : []),
         ...(can('inventario.columnas') ? [{ to: '/inventario/columnas', label: 'Administrar columnas' }] : []),
       ]} />
       <Routes>
         <Route index element={<Products />} />
-        <Route path="movimientos" element={<Card><MovementsTable /></Card>} />
+        <Route path="movimientos" element={<MovementsTable />} />
         {can('observaciones.ver') && <Route path="observaciones/*" element={<ObservationsRoutes />} />}
         <Route path="importar" element={<ImportExport />} />
         {can('inventario.columnas') && <Route path="columnas" element={<ColumnsAdmin />} />}

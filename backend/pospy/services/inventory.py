@@ -22,6 +22,7 @@ from . import ledger
 from .columns import ColumnService, typed
 from .ledger import Line
 from .open_items import AP, OpenItems
+from .scopes import InventoryScopes
 
 UNITS = ("und", "kg", "g", "l", "ml", "m", "cm", "caja", "paquete", "servicio")
 ENTRY_COUNTERPARTS = {
@@ -34,16 +35,35 @@ EXIT_COUNTERPARTS = {
     "merma": "Merma, daño o pérdida",
     "consumo_interno": "Consumo interno",
 }
+# Categorías del panel de movimientos (sobre inventory_movements m).
+CATEGORIES = {
+    "entradas": "(m.kind IN ('inicial','entrada','anulacion_venta') OR (m.kind IN ('ajuste','conciliacion') AND m.qty_milli > 0))",
+    "salidas": "(m.kind IN ('venta','salida') OR (m.kind IN ('ajuste','conciliacion') AND m.qty_milli < 0))",
+    "devoluciones": "(m.kind = 'devolucion')",
+}
 PRODUCT_FIELDS = ("code", "description", "category_id", "unit", "price", "discount_price", "cost", "tax_rate",
                   "min_stock", "active", "external_ref")
 
 
 class InventoryService:
-    def __init__(self, db, settings):
+    def __init__(self, db, settings, scopes: InventoryScopes | None = None):
         self.db = db
         self.settings = settings
         self.payables = OpenItems(db, settings, AP)
         self.columns = ColumnService(db)
+        self.scopes = scopes or InventoryScopes(db)
+
+    def _scope(self, actor: Actor, inventory: str | None) -> int | None:
+        with self.db.read() as conn:
+            return self.scopes.resolve(conn, actor, inventory)
+
+    def _product_group(self, conn: sqlite3.Connection, actor: Actor, product_id: int) -> int | None:
+        """Inventario del producto, si esta persona puede entrar a él; si no, «no encontrado»."""
+        row = conn.execute("SELECT group_id FROM products WHERE id = ?", (product_id,)).fetchone()
+        if not row:
+            raise NotFoundError("Producto no encontrado.")
+        self.scopes.check(conn, actor, row["group_id"])
+        return row["group_id"]
 
     def _tz(self) -> str:
         return self.settings.get("empresa")["timezone"]
@@ -51,9 +71,9 @@ class InventoryService:
     # ------------------------------------------------------------------ consulta
     def list(self, actor: Actor, q: str = "", category_id: int | None = None, status: str = "activos",
              low_stock: bool = False, sort: str | None = None, direction: str | None = None, page: int = 1,
-             page_size: int = 50) -> dict:
+             page_size: int = 50, inventory: str | None = None) -> dict:
         actor.require("inventario.ver")
-        where, params = [], []
+        where, params = ["p.group_id IS ?"], [self._scope(actor, inventory)]
         if status == "activos":
             where.append("p.active = 1")
         elif status == "inactivos":
@@ -99,34 +119,50 @@ class InventoryService:
                                " LEFT JOIN users uu ON uu.id = p.updated_by WHERE p.id = ?", (product_id,)).fetchone()
             if not row:
                 raise NotFoundError("Producto no encontrado.")
+            self.scopes.check(conn, actor, row["group_id"])
             custom = self.columns.values_for(conn, [product_id])[product_id]
         product = self._public(actor, dict(row))
         product["custom"] = custom
         return product
 
-    def lookup(self, actor: Actor, q: str, limit: int = 20) -> list[dict]:
-        """Búsqueda rápida para vender o cotizar: coincidencia exacta de código primero."""
+    def lookup(self, actor: Actor, q: str, limit: int = 20, inventory: str | None = None) -> list[dict]:
+        """Búsqueda rápida para vender o cotizar (en el inventario elegido): coincidencia exacta de código primero."""
         if not any(actor.can(p) for p in ("ventas.vender", "documentos.crear", "inventario.ver")):
             actor.require("inventario.ver")
         q = (q or "").strip()
         if not q:
             return []
         with self.db.read() as conn:
+            group_id = self.scopes.resolve(conn, actor, inventory)
             rows = conn.execute(
                 "SELECT p.id, p.code, p.description, p.unit, p.price_cents, p.discount_price_cents, p.tax_rate_bp,"
-                " p.stock_milli, p.min_stock_milli FROM products p WHERE p.active = 1 AND (p.code = ? COLLATE NOCASE"
+                " p.stock_milli, p.min_stock_milli FROM products p WHERE p.active = 1 AND p.group_id IS ? AND (p.code = ? COLLATE NOCASE"
                 " OR p.code LIKE ? ESCAPE '\\' OR p.description LIKE ? ESCAPE '\\')"
                 " ORDER BY (p.code = ? COLLATE NOCASE) DESC, p.description COLLATE NOCASE LIMIT ?",
-                (q, like(q), like(q), q, min(50, max(1, limit)))).fetchall()
+                (group_id, q, like(q), like(q), q, min(50, max(1, limit)))).fetchall()
         return [dict(r) for r in rows]
 
     def history(self, actor: Actor, product_id: int | None = None, kind: str = "", date_from: str = "",
-                date_to: str = "", page: int = 1, page_size: int = 50) -> dict:
+                date_to: str = "", page: int = 1, page_size: int = 50, inventory: str | None = None,
+                category: str = "", user_id: int | None = None) -> dict:
+        """Movimientos (más recientes primero). category: entradas | salidas; user_id: quién lo registró."""
         actor.require("inventario.ver")
         where, params = [], []
+        if category:
+            if category not in CATEGORIES:
+                raise ValidationError("Tipo de movimiento no válido.")
+            where.append(CATEGORIES[category])
+        if user_id:
+            where.append("m.user_id = ?")
+            params.append(user_id)
         if product_id:
+            with self.db.read() as conn:
+                self._product_group(conn, actor, product_id)
             where.append("m.product_id = ?")
             params.append(product_id)
+        else:
+            where.append("p.group_id IS ?")
+            params.append(self._scope(actor, inventory))
         if kind:
             where.append("m.kind = ?")
             params.append(kind)
@@ -136,8 +172,11 @@ class InventoryService:
         if date_to:
             where.append("m.created_at < date(?, '+1 day')")
             params.append(date_to[:10])
-        sql = ("SELECT m.*, p.code, p.description, u.username, u.full_name FROM inventory_movements m"
-               " JOIN products p ON p.id = m.product_id LEFT JOIN users u ON u.id = m.user_id"
+        sql = ("SELECT m.*, m.stock_after_milli - m.qty_milli AS stock_before_milli, p.code, p.description, p.unit,"
+               " u.username, u.full_name,"
+               " CASE m.reference_type WHEN 'venta' THEN (SELECT number FROM sales WHERE id = m.reference_id)"
+               "  WHEN 'devolucion' THEN (SELECT number FROM sale_returns WHERE id = m.reference_id) END AS reference_number"
+               " FROM inventory_movements m JOIN products p ON p.id = m.product_id LEFT JOIN users u ON u.id = m.user_id"
                + (" WHERE " + " AND ".join(where) if where else ""))
         with self.db.read() as conn:
             result = paginate(conn, sql, params, sort="id", direction="desc", default_sort="id", tiebreak="m.id", sortable={"id": "m.id"},
@@ -147,20 +186,105 @@ class InventoryService:
                 m.pop("unit_cost_cents", None)
         return result
 
-    def summary(self, actor: Actor) -> dict:
+    def returns(self, actor: Actor, inventory: str | None = None, date_from: str = "", date_to: str = "",
+                product_id: int | None = None, user_id: int | None = None, condition: str = "", page: int = 1,
+                page_size: int = 50) -> dict:
+        """Productos devueltos por clientes, con la venta original y cuánto volvió realmente al inventario."""
+        actor.require("inventario.ver")
+        where, params = ["s.group_id IS ?"], [self._scope(actor, inventory)]
+        for value, clause in ((date_from, "r.return_date >= ?"), (date_to, "r.return_date <= ?")):
+            if value:
+                where.append(clause)
+                params.append(str(parse_date(value)))
+        if product_id:
+            where.append("sl.product_id = ?")
+            params.append(product_id)
+        if user_id:
+            where.append("r.user_id = ?")
+            params.append(user_id)
+        if condition:
+            if condition not in ("apto", "revision", "no_apto"):
+                raise ValidationError("Estado no válido.")
+            where.append("rl.condition = ?")
+            params.append(condition)
+        sql = ("SELECT rl.id, rl.qty_milli, rl.condition, rl.resolved_at, CASE WHEN rl.condition = 'apto' THEN rl.qty_milli ELSE 0 END"
+               " AS restocked_milli, r.id AS return_id, r.number AS return_number, r.reason, r.return_date, r.created_at,"
+               " r.refund_cents, s.id AS sale_id, s.number AS sale_number, sl.product_id, sl.code, sl.description,"
+               " u.full_name AS user_name, ru.full_name AS resolved_by_name"
+               " FROM sale_return_lines rl JOIN sale_returns r ON r.id = rl.return_id JOIN sales s ON s.id = r.sale_id"
+               " JOIN sale_lines sl ON sl.id = rl.sale_line_id JOIN users u ON u.id = r.user_id"
+               " LEFT JOIN users ru ON ru.id = rl.resolved_by WHERE " + " AND ".join(where))
+        with self.db.read() as conn:
+            return paginate(conn, sql, params, sort="id", direction="desc", default_sort="id", tiebreak="rl.id",
+                            sortable={"id": "rl.id"}, page=page, page_size=page_size)
+
+    def dashboard(self, actor: Actor, inventory: str | None = None, date_from: str = "", date_to: str = "",
+                  product_id: int | None = None, user_id: int | None = None) -> dict:
+        """Indicadores del inventario elegido para el periodo y filtros (datos reales de la base)."""
         actor.require("inventario.ver")
         with self.db.read() as conn:
+            group_id = self.scopes.resolve(conn, actor, inventory)
+            # Mismos filtros sobre movimientos (m), ventas (s) y devoluciones (r/sl).
+            where, swhere, rwhere = ["p.group_id IS ?"], ["s.group_id IS ?"], ["s.group_id IS ?"]
+            params, sparams, rparams = [group_id], [group_id], [group_id]
+
+            def add(clause_m: str, clause_s: str, clause_r: str, value) -> None:
+                where.append(clause_m)
+                swhere.append(clause_s)
+                rwhere.append(clause_r)
+                params.append(value)
+                sparams.append(value)
+                rparams.append(value)
+
+            for value, op in ((date_from, ">="), (date_to, "<=")):
+                if value:
+                    add(f"date(m.created_at) {op} ?", f"s.sale_date {op} ?", f"r.return_date {op} ?", str(parse_date(value)))
+            if product_id:
+                add("m.product_id = ?", "EXISTS (SELECT 1 FROM sale_lines x WHERE x.sale_id = s.id AND x.product_id = ?)",
+                    "sl.product_id = ?", product_id)
+            if user_id:
+                add("m.user_id = ?", "s.user_id = ?", "r.user_id = ?", user_id)
+            base = " FROM inventory_movements m JOIN products p ON p.id = m.product_id WHERE " + " AND ".join(where)
+            counts = {}
+            for name, clause in CATEGORIES.items():
+                row = conn.execute(f"SELECT COUNT(*), COALESCE(SUM(ABS(m.qty_milli)), 0){base} AND {clause}", params).fetchone()
+                counts[name] = {"count": row[0], "qty_milli": row[1]}
+            ret = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(rl.qty_milli), 0), COALESCE(SUM(CASE WHEN rl.condition = 'apto' THEN rl.qty_milli END), 0),"
+                " COALESCE(SUM(rl.condition = 'revision'), 0) FROM sale_return_lines rl JOIN sale_returns r ON r.id = rl.return_id"
+                " JOIN sales s ON s.id = r.sale_id JOIN sale_lines sl ON sl.id = rl.sale_line_id WHERE " + " AND ".join(rwhere),
+                rparams).fetchone()
+            counts["devoluciones"] = {"count": ret[0], "qty_milli": ret[1], "restocked_milli": ret[2], "pending_review": ret[3]}
+            sales = conn.execute("SELECT COUNT(*) FILTER (WHERE s.status = 'completada'), COUNT(*) FILTER (WHERE s.status = 'anulada'),"
+                                 " COALESCE(SUM(s.total_cents) FILTER (WHERE s.status = 'completada'), 0) FROM sales s WHERE "
+                                 + " AND ".join(swhere), sparams).fetchone()
+            low = conn.execute("SELECT COUNT(*) FROM products WHERE active = 1 AND group_id IS ? AND stock_milli <= min_stock_milli",
+                               (group_id,)).fetchone()[0]
+            people = [dict(r) for r in conn.execute(
+                "SELECT u.id, u.full_name, COUNT(*) AS movements, MAX(m.created_at) AS last_at"
+                f"{base.replace(' WHERE ', ' JOIN users u ON u.id = m.user_id WHERE ', 1)} GROUP BY u.id ORDER BY movements DESC LIMIT 20",
+                params)]
+            info = self.scopes.describe(conn, group_id)
+        return {"inventory": info, "counts": counts,
+                "sales": {"completed": sales[0], "voided": sales[1], "total_cents": sales[2]} if actor.can("ventas.historial")
+                else {"completed": sales[0], "voided": sales[1]},
+                "low_stock": low, "people": people}
+
+    def summary(self, actor: Actor, inventory: str | None = None) -> dict:
+        actor.require("inventario.ver")
+        with self.db.read() as conn:
+            group_id = self.scopes.resolve(conn, actor, inventory)
             row = conn.execute("SELECT COUNT(*) AS products, SUM(stock_milli <= min_stock_milli) AS low_stock,"
                                " SUM(stock_milli <= 0) AS out_of_stock,"
                                " SUM(CASE WHEN stock_milli > 0 THEN stock_milli * cost_cents / 1000 ELSE 0 END) AS value_cents"
-                               " FROM products WHERE active = 1").fetchone()
+                               " FROM products WHERE active = 1 AND group_id IS ?", (group_id,)).fetchone()
         result = {"products": row["products"], "low_stock": row["low_stock"] or 0, "out_of_stock": row["out_of_stock"] or 0}
         if actor.can("inventario.costos"):
             result["value_cents"] = int(row["value_cents"] or 0)
         return result
 
     # ------------------------------------------------------------------ altas y ediciones
-    def _validated(self, conn: sqlite3.Connection, data: dict, current: dict | None) -> dict:
+    def _validated(self, conn: sqlite3.Connection, data: dict, current: dict | None, group_id: int | None = None) -> dict:
         errors: dict[str, str] = {}
         merged = {**(current or {}), **{k: v for k, v in data.items() if k in PRODUCT_FIELDS}}
 
@@ -226,10 +350,11 @@ class InventoryService:
             if not conn.execute("SELECT 1 FROM categories WHERE id = ?", (category_id,)).fetchone():
                 errors["category_id"] = "Seleccione una categoría válida."
         if code and not errors.get("code"):
-            dup = conn.execute("SELECT id FROM products WHERE code = ? AND id IS NOT ?",
-                               (code, current["id"] if current else None)).fetchone()
+            group_id = current["group_id"] if current else group_id
+            dup = conn.execute("SELECT id FROM products WHERE code = ? AND group_id IS ? AND id IS NOT ?",
+                               (code, group_id, current["id"] if current else None)).fetchone()
             if dup:
-                errors["code"] = "Ya existe un producto con este código."
+                errors["code"] = "Ya existe un producto con este código en este inventario."
         if errors:
             raise ValidationError("Revise los datos del producto.", errors)
         return {"code": code, "description": description, "category_id": category_id, "unit": unit,
@@ -238,7 +363,7 @@ class InventoryService:
                 "active": int(bool(merged.get("active", True))),
                 "external_ref": (str(merged.get("external_ref") or "").strip() or None)}
 
-    def create(self, actor: Actor, data: dict) -> dict:
+    def create(self, actor: Actor, data: dict, inventory: str | None = None) -> dict:
         actor.require("inventario.editar")
         initial = parse_decimal(data.get("initial_stock")) if data.get("initial_stock") not in (None, "") else None
         if initial is not None:
@@ -246,20 +371,23 @@ class InventoryService:
             if initial < 0:
                 raise ValidationError("Revise los datos.", {"initial_stock": "La existencia inicial no puede ser negativa."})
         with self.db.tx() as conn:
-            product_id = self.create_conn(conn, actor, data)
+            group_id = self.scopes.resolve(conn, actor, inventory)
+            product_id = self.create_conn(conn, actor, data, group_id)
             if initial:
                 product = conn.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
                 self._entry(conn, actor, product, to_milli(initial), product["cost_cents"], "Existencia inicial",
                             "inventario_inicial", {}, None, kind="inicial")
+        self.scopes.notify(group_id, "producto", product=product_id)
         return self.get(actor, product_id)
 
-    def create_conn(self, conn: sqlite3.Connection, actor: Actor, data: dict) -> int:
-        values = self._validated(conn, data, None)
+    def create_conn(self, conn: sqlite3.Connection, actor: Actor, data: dict, group_id: int | None = None) -> int:
+        values = self._validated(conn, data, None, group_id)
         now = iso()
         cols = ", ".join(values)
         product_id = conn.execute(
-            f"INSERT INTO products({cols}, created_at, updated_at, created_by, updated_by)"
-            f" VALUES ({', '.join('?' * len(values))}, ?, ?, ?, ?)", (*values.values(), now, now, actor.id, actor.id)).lastrowid
+            f"INSERT INTO products(group_id, {cols}, created_at, updated_at, created_by, updated_by)"
+            f" VALUES (?, {', '.join('?' * len(values))}, ?, ?, ?, ?)",
+            (group_id, *values.values(), now, now, actor.id, actor.id)).lastrowid
         custom = self.columns.set_values_conn(conn, actor, product_id, data.get("custom"), creating=True,
                                               keep_existing_on_empty=bool(data.get("_import")))
         record(conn, actor, "producto.crear", "product", product_id, {"codigo": values["code"],
@@ -274,7 +402,10 @@ class InventoryService:
         if "cost" in data and not actor.can("inventario.costos"):
             actor.require("inventario.costos")
         with self.db.tx() as conn:
-            self.update_conn(conn, actor, product_id, data)
+            group_id = self._product_group(conn, actor, product_id)
+            changed = self.update_conn(conn, actor, product_id, data)
+        if changed:
+            self.scopes.notify(group_id, "producto", product=product_id)
         return self.get(actor, product_id)
 
     def update_conn(self, conn: sqlite3.Connection, actor: Actor, product_id: int, data: dict) -> dict:
@@ -337,12 +468,11 @@ class InventoryService:
         if not reason:
             raise ValidationError("Indique el motivo.", {"reason": "El motivo es obligatorio."})
         with self.db.tx() as conn:
+            group_id = self._product_group(conn, actor, product_id)
             done = conn.execute("SELECT id FROM inventory_movements WHERE idempotency_key = ?", (idempotency_key,)).fetchone()
             if done:
                 return {"duplicate": True, "movement_id": done[0], "product": self._product_conn(conn, product_id)}
             product = conn.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
-            if not product:
-                raise NotFoundError("Producto no encontrado.")
             if not product["active"]:
                 raise ValidationError("El producto está desactivado. Actívelo antes de mover existencias.")
             if kind == "ajuste":
@@ -374,7 +504,9 @@ class InventoryService:
                     if counterpart not in EXIT_COUNTERPARTS:
                         raise ValidationError("Destino no válido.", {"counterpart": "Elija el destino de la salida."})
                     move_id = self._exit(conn, actor, product, qty_milli, reason, counterpart, idempotency_key)
-            return {"duplicate": False, "movement_id": move_id, "product": self._product_conn(conn, product_id)}
+            result = {"duplicate": False, "movement_id": move_id, "product": self._product_conn(conn, product_id)}
+        self.scopes.notify(group_id, "movimiento", product=product_id)
+        return result
 
     def _entry(self, conn: sqlite3.Connection, actor: Actor, product, qty_milli: int, unit_cost: int, reason: str,
                counterpart: str, data: dict, idempotency_key: str | None, kind: str = "entrada") -> int:
@@ -449,12 +581,13 @@ class InventoryService:
         return dict(conn.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone())
 
     # ------------------------------------------------------------------ exportación
-    def export(self, actor: Actor, fmt: str = "xlsx") -> tuple[bytes, str, str]:
+    def export(self, actor: Actor, fmt: str = "xlsx", inventory: str | None = None) -> tuple[bytes, str, str]:
         actor.require("inventario.importar")
         include_cost = actor.can("inventario.costos")
         with self.db.read() as conn:
+            group_id = self.scopes.resolve(conn, actor, inventory)
             rows = conn.execute("SELECT p.*, c.name AS category FROM products p LEFT JOIN categories c ON c.id = p.category_id"
-                                " ORDER BY p.code COLLATE NOCASE").fetchall()
+                                " WHERE p.group_id IS ? ORDER BY p.code COLLATE NOCASE", (group_id,)).fetchall()
             extra = self.columns.columns_conn(conn)
             custom = self.columns.values_for(conn, [r["id"] for r in rows])
         header = ["Código", "Descripción", "Categoría", "Unidad", "Precio sin descuento", "Precio con descuento"]

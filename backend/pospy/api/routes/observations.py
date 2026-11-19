@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from ...context import AppContext
 from ...core.actor import Actor
 from ...core.errors import ValidationError
-from ..deps import actor, ctx
+from ..deps import actor, ctx, inventory_key
 from ..models import Observation, ObservationComment, ObservationDelete, ObservationStatus
 from ..serialize import out
 
@@ -25,8 +25,9 @@ def meta(current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
 
 
 @router.get("/observations/products")
-def products(q: str = "", limit: int = 15, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
-    return app.observations.product_search(current, q, limit)
+def products(q: str = "", limit: int = 15, inv: str | None = Depends(inventory_key), current: Actor = Depends(actor),
+             app: AppContext = Depends(ctx)):
+    return app.observations.product_search(current, q, limit, inv)
 
 
 @router.get("/observations/products/{product_id}")
@@ -47,11 +48,12 @@ def flags(ids: str = "", current: Actor = Depends(actor), app: AppContext = Depe
 def list_observations(q: str = "", product_id: int | None = None, category_id: int | None = None, priority: str = "",
                       status: str = "", responsible_id: int | None = None, supplier_id: int | None = None,
                       date_from: str = "", date_to: str = "", quick: str = "todas", sort: str = "recientes",
-                      page: int = 1, page_size: int = 25, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+                      page: int = 1, page_size: int = 25, inv: str | None = Depends(inventory_key),
+                      current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
     filters = {"q": q, "product_id": product_id, "category_id": category_id, "priority": priority, "status": status,
                "responsible_id": responsible_id, "supplier_id": supplier_id, "date_from": date_from, "date_to": date_to,
                "quick": quick}
-    return out(app.observations.list(current, filters, sort, page, page_size))
+    return out(app.observations.list(current, filters, sort, page, page_size, inv))
 
 
 @router.post("/observations")

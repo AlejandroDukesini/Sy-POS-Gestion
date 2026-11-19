@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from .migrations import MIGRATIONS
+from .migrations import FOREIGN_KEYS_OFF, MIGRATIONS
 
 
 def _configure(conn: sqlite3.Connection) -> sqlite3.Connection:
@@ -62,19 +62,52 @@ class Database:
                 conn.close()
 
     def migrate(self) -> list[int]:
+        """Aplica las migraciones pendientes en orden, cada una en su propia transacción.
+
+        Las marcadas en FOREIGN_KEYS_OFF reconstruyen una tabla referenciada por otras (procedimiento
+        oficial de SQLite): se ejecutan con las claves foráneas desactivadas y, antes de confirmar,
+        PRAGMA foreign_key_check debe salir vacío; si no, se revierte todo.
+        """
         applied: list[int] = []
         with self.tx() as conn:
             conn.execute("CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, name TEXT NOT NULL,"
                          " applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')))")
             done = {r[0] for r in conn.execute("SELECT version FROM schema_migrations")}
-            for version, name, script in MIGRATIONS:
-                if version in done:
-                    continue
-                for statement in split_sql(script):
-                    conn.execute(statement)
-                conn.execute("INSERT INTO schema_migrations(version, name) VALUES (?, ?)", (version, name))
-                applied.append(version)
+        for version, name, script in MIGRATIONS:
+            if version in done:
+                continue
+            if version in FOREIGN_KEYS_OFF:
+                self._migrate_without_fk(version, name, script)
+            else:
+                with self.tx() as conn:
+                    for statement in split_sql(script):
+                        conn.execute(statement)
+                    conn.execute("INSERT INTO schema_migrations(version, name) VALUES (?, ?)", (version, name))
+            applied.append(version)
         return applied
+
+    def _migrate_without_fk(self, version: int, name: str, script: str) -> None:
+        with self.write_lock:
+            conn = self.connect()
+            try:
+                conn.execute("PRAGMA foreign_keys = OFF")        # solo surte efecto fuera de una transacción
+                conn.execute("PRAGMA legacy_alter_table = ON")
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    for statement in split_sql(script):
+                        conn.execute(statement)
+                    broken = conn.execute("PRAGMA foreign_key_check").fetchall()
+                    if broken:
+                        raise RuntimeError(f"La migración {version} dejó referencias rotas: {[tuple(r) for r in broken[:5]]}")
+                    conn.execute("INSERT INTO schema_migrations(version, name) VALUES (?, ?)", (version, name))
+                except BaseException:
+                    conn.execute("ROLLBACK")
+                    raise
+                conn.execute("COMMIT")
+            finally:
+                conn.execute("PRAGMA legacy_alter_table = OFF")
+                conn.execute("PRAGMA foreign_keys = ON")
+                conn.close()
 
     def schema_version(self) -> int:
         with self.read() as conn:

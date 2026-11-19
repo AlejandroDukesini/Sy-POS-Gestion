@@ -251,3 +251,4 @@ label.btn.is-disabled { opacity: 0.55; pointer-events: none; }
 .custom-map { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px; align-items: end; }
 .new-column-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); gap: 12px; align-items: end;
   padding: 12px; border: 1px dashed var(--border-strong); border-radius: var(--radius); }
+.plain-list { list-style: none; margin: 0; padding: 0; }

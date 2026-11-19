@@ -16,7 +16,7 @@ import { useEffect, useRef, useState } from 'react';
 export type RealtimeStatus = 'conectando' | 'conectado' | 'reconectando' | 'desconectado';
 export interface RealtimeEvent { type: string; group?: string; user?: number; change?: string; [key: string]: unknown }
 
-const EVENT_TYPES = ['hola', 'grupo', 'presencia', 'cuenta', 'sesion', 'tarea', 'resync'];
+const EVENT_TYPES = ['hola', 'grupo', 'presencia', 'cuenta', 'sesion', 'tarea', 'inventario', 'resync'];
 const listeners = new Set<(e: RealtimeEvent) => void>();
 const statusListeners = new Set<(s: RealtimeStatus) => void>();
 let source: EventSource | null = null;
@@ -123,7 +123,14 @@ function close() {
 function onOnline() {
   if (!users) return;
   retryDelay = 2000;
-  if (!source) open();
+  // Volvió la red: se abre un canal nuevo aunque el anterior parezca abierto (pudo quedar medio cerrado
+  // durante el corte y el estado se quedaría en «reconectando»). Al abrir se emite «resync».
+  if (source) {
+    source.close();
+    source = null;
+    stopPing();
+  }
+  open();
 }
 
 function onOffline() {

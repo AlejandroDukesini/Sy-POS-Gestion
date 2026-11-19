@@ -4,6 +4,22 @@ Una venta es una sola transacción: líneas + salida de inventario + pagos + cue
 hay parte a crédito) + asientos. La clave de idempotencia la genera la interfaz por cada intento de
 cobro: un doble clic o un reintento de red devuelve la venta ya registrada en lugar de duplicarla.
 
+Inventario por grupo: todos los productos de una venta deben ser del mismo inventario y la persona
+debe poder entrar a él (integrante activo del grupo o, en el general, administrador / empleado sin
+grupo). La venta guarda ese inventario (sales.group_id) y solo la ven, anulan o devuelven quienes
+entran a él. Dos ventas simultáneas de las últimas unidades no dejan existencias negativas: las
+escrituras se serializan (BEGIN IMMEDIATE + candado) y la existencia se comprueba dentro de la
+transacción.
+
+Anular (cancelar) una venta es una cancelación comercial: conserva la venta y su movimiento de
+salida, y agrega movimientos de entrada compensatorios y reversos contables. NO registra un
+reembolso de dinero: si el cliente pagó, la devolución del dinero se registra con una devolución
+(que sí lleva medio de reembolso) o en Finanzas.
+
+Devoluciones: cada línea indica el estado del producto devuelto. «apto» vuelve al inventario;
+«revision» queda pendiente (no vuelve hasta que alguien la revise); «no_apto» no vuelve (su costo
+pasa a pérdida de inventario).
+
 El comprobante que se imprime es un documento interno de venta: NO es una factura electrónica
 DIAN. Si la empresa está obligada a facturar electrónicamente, debe hacerlo con su proveedor
 tecnológico autorizado.
@@ -27,6 +43,8 @@ from .inventory import InventoryService
 from .ledger import Line
 from .open_items import AR, OpenItems
 
+CONDITIONS = ("apto", "revision", "no_apto")
+
 
 class SalesService:
     def __init__(self, db, settings, inventory: InventoryService):
@@ -38,12 +56,32 @@ class SalesService:
     def _tz(self) -> str:
         return self.settings.get("empresa")["timezone"]
 
+    def _lines_inventory(self, conn: sqlite3.Connection, actor: Actor, product_ids: list[int]) -> int | None:
+        """Inventario común de los productos de la venta (y que esta persona pueda entrar a él)."""
+        if not product_ids:
+            return self.inventory.scopes.resolve(conn, actor, None)
+        marks = ",".join("?" * len(product_ids))
+        groups = {r[0] for r in conn.execute(f"SELECT DISTINCT group_id FROM products WHERE id IN ({marks})", product_ids)}
+        if len(groups) > 1:
+            raise ValidationError("Todos los productos de una venta deben ser del mismo inventario.")
+        group_id = next(iter(groups)) if groups else None
+        self.inventory.scopes.check(conn, actor, group_id)
+        return group_id
+
+    def _sale_row(self, conn: sqlite3.Connection, actor: Actor, sale_id: int):
+        sale = conn.execute("SELECT * FROM sales WHERE id = ?", (sale_id,)).fetchone()
+        if not sale:
+            raise NotFoundError("Venta no encontrada.")
+        self.inventory.scopes.check(conn, actor, sale["group_id"], "Venta")
+        return sale
+
     # ------------------------------------------------------------------ cotizar el carrito (sin guardar)
     def quote(self, actor: Actor, items: list[dict], payments: list[dict] | None = None) -> dict:
         if not (actor.can("ventas.vender") or actor.can("documentos.crear")):
             actor.require("ventas.vender")
         with self.db.read() as conn:
             lines, totals = pricing.price_items(conn, actor, items, self.settings.get("ventas", conn))
+            self._lines_inventory(conn, actor, [ln.product_id for ln in lines])
             allow_negative = self.settings.get("inventario", conn)["allow_negative_stock"]
         needed: dict[int, int] = defaultdict(int)
         for ln in lines:
@@ -83,10 +121,11 @@ class SalesService:
             raise ValidationError("Falta la clave de idempotencia de la venta.")
         with self.db.tx() as conn:
             existing = conn.execute("SELECT id FROM sales WHERE idempotency_key = ?", (idempotency_key,)).fetchone()
-            if existing:
+            if existing:   # reintento (doble clic o reconexión): se devuelve la misma venta, sin duplicarla
                 return {"duplicate": True, **self._detail(conn, existing[0])}
             ventas = self.settings.get("ventas", conn)
             lines, totals = pricing.price_items(conn, actor, data.get("lines") or [], ventas)
+            group_id = self._lines_inventory(conn, actor, [ln.product_id for ln in lines])
             customer = self._customer(conn, data.get("customer_id"))
             payments, credit, change = self._validate_payments(conn, data.get("payments") or [], totals.total_cents)
             if credit and not customer:
@@ -96,12 +135,12 @@ class SalesService:
             sale_id = conn.execute(
                 "INSERT INTO sales(number, idempotency_key, customer_id, customer_name, customer_identification, gross_cents,"
                 " discount_cents, total_cents, tax_cents, cost_cents, paid_cents, credit_cents, change_cents, notes, sale_date,"
-                " user_id, created_at, source_document_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " user_id, created_at, source_document_id, group_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (number, idempotency_key, customer["id"] if customer else None, customer["name"] if customer else "",
                  (customer["identification"] or "") if customer else "", totals.gross_cents, totals.discount_cents,
                  totals.total_cents, totals.tax_cents, totals.cost_cents, totals.total_cents - credit, credit, change,
                  (data.get("notes") or "").strip()[:500], str(today), actor.id, iso(),
-                 data.get("source_document_id") or None)).lastrowid
+                 data.get("source_document_id") or None, group_id)).lastrowid
             for ln in lines:
                 conn.execute(
                     "INSERT INTO sale_lines(sale_id, line_no, product_id, code, description, qty_milli, list_price_cents,"
@@ -124,7 +163,9 @@ class SalesService:
             self._post_sale(conn, actor, sale_id, number, today, totals, payments, credit, customer)
             record(conn, actor, "venta.registrar", "sale", sale_id,
                    {"numero": number, "total": totals.total_cents, "lineas": len(lines), "credito": credit})
-            return {"duplicate": False, **self._detail(conn, sale_id)}
+            result = {"duplicate": False, **self._detail(conn, sale_id)}
+        self.inventory.scopes.notify(group_id, "venta", sale=sale_id, products=[ln.product_id for ln in lines])
+        return result
 
     def _customer(self, conn: sqlite3.Connection, customer_id) -> sqlite3.Row | None:
         if customer_id in (None, "", 0):
@@ -190,9 +231,13 @@ class SalesService:
 
     # ------------------------------------------------------------------ consulta
     def list(self, actor: Actor, q: str = "", status: str = "", date_from: str = "", date_to: str = "",
-             page: int = 1, page_size: int = 50) -> dict:
+             page: int = 1, page_size: int = 50, inventory: str | None = None, user_id: int | None = None) -> dict:
         actor.require("ventas.historial")
-        where, params = [], []
+        with self.db.read() as conn:
+            where, params = ["s.group_id IS ?"], [self.inventory.scopes.resolve(conn, actor, inventory)]
+        if user_id:
+            where.append("s.user_id = ?")
+            params.append(user_id)
         if q:
             where.append("(s.number LIKE ? ESCAPE '\\' OR s.customer_name LIKE ? ESCAPE '\\')")
             params += [like(q)] * 2
@@ -206,7 +251,7 @@ class SalesService:
             where.append("s.sale_date <= ?")
             params.append(str(parse_date(date_to)))
         sql = ("SELECT s.id, s.number, s.status, s.customer_name, s.total_cents, s.credit_cents, s.sale_date, s.created_at,"
-               " u.username, (SELECT COALESCE(SUM(total_cents), 0) FROM sale_returns r WHERE r.sale_id = s.id) AS returned_cents"
+               " u.username, u.full_name AS seller_name, s.user_id, s.voided_at, s.void_reason, (SELECT COALESCE(SUM(total_cents), 0) FROM sale_returns r WHERE r.sale_id = s.id) AS returned_cents"
                " FROM sales s JOIN users u ON u.id = s.user_id" + (" WHERE " + " AND ".join(where) if where else ""))
         with self.db.read() as conn:
             return paginate(conn, sql, params, sort="id", direction="desc", default_sort="id",
@@ -216,13 +261,15 @@ class SalesService:
         if not (actor.can("ventas.historial") or actor.can("ventas.vender")):
             actor.require("ventas.historial")
         with self.db.read() as conn:
+            self._sale_row(conn, actor, sale_id)
             sale = self._detail(conn, sale_id)
         if not actor.can("ventas.historial") and sale["user_id"] != actor.id:
             actor.require("ventas.historial")
         return sale
 
     def _detail(self, conn: sqlite3.Connection, sale_id: int) -> dict:
-        row = conn.execute("SELECT s.*, u.username, u.full_name AS seller_name FROM sales s JOIN users u ON u.id = s.user_id"
+        row = conn.execute("SELECT s.*, u.username, u.full_name AS seller_name, vu.full_name AS voided_by_name FROM sales s"
+                           " JOIN users u ON u.id = s.user_id LEFT JOIN users vu ON vu.id = s.voided_by"
                            " WHERE s.id = ?", (sale_id,)).fetchone()
         if not row:
             raise NotFoundError("Venta no encontrada.")
@@ -236,6 +283,11 @@ class SalesService:
         sale["returns"] = [dict(r) for r in conn.execute(
             "SELECT r.*, u.username, m.name AS refund_method_name FROM sale_returns r JOIN users u ON u.id = r.user_id"
             " LEFT JOIN payment_methods m ON m.id = r.refund_method_id WHERE sale_id = ? ORDER BY r.id", (sale_id,))]
+        for r in sale["returns"]:
+            r["lines"] = [dict(x) for x in conn.execute(
+                "SELECT rl.id, rl.sale_line_id, rl.qty_milli, rl.condition, rl.resolved_at, sl.code, sl.description"
+                " FROM sale_return_lines rl JOIN sale_lines sl ON sl.id = rl.sale_line_id WHERE rl.return_id = ? ORDER BY rl.id",
+                (r["id"],))]
         sale["receivable"] = next((dict(r) for r in conn.execute(
             "SELECT id, number, due_date, amount_cents, status FROM receivables WHERE source_type = 'venta' AND source_id = ?",
             (sale_id,))), None)
@@ -251,9 +303,7 @@ class SalesService:
         if not reason:
             raise ValidationError("Indique el motivo de la anulación.", {"reason": "El motivo es obligatorio."})
         with self.db.tx() as conn:
-            sale = conn.execute("SELECT * FROM sales WHERE id = ?", (sale_id,)).fetchone()
-            if not sale:
-                raise NotFoundError("Venta no encontrada.")
+            sale = self._sale_row(conn, actor, sale_id)
             if sale["status"] == "anulada":
                 raise ValidationError("La venta ya estaba anulada.")
             if conn.execute("SELECT 1 FROM sale_returns WHERE sale_id = ?", (sale_id,)).fetchone():
@@ -279,7 +329,10 @@ class SalesService:
                 if not entry["reverses_id"] and not entry["reversed_by_id"]:
                     ledger.reverse(conn, actor, entry["id"], today, f"anulación {sale['number']}")
             record(conn, actor, "venta.anular", "sale", sale_id, {"numero": sale["number"], "motivo": reason})
-            return self._detail(conn, sale_id)
+            result = self._detail(conn, sale_id)
+            products = [ln["product_id"] for ln in result["lines"]]
+        self.inventory.scopes.notify(sale["group_id"], "anulacion", sale=sale_id, products=products)
+        return result
 
     # ------------------------------------------------------------------ devoluciones
     def register_return(self, actor: Actor, sale_id: int, data: dict, idempotency_key: str) -> dict:
@@ -293,9 +346,7 @@ class SalesService:
             done = conn.execute("SELECT sale_id FROM sale_returns WHERE idempotency_key = ?", (idempotency_key,)).fetchone()
             if done:
                 return {"duplicate": True, **self._detail(conn, done[0])}
-            sale = conn.execute("SELECT * FROM sales WHERE id = ?", (sale_id,)).fetchone()
-            if not sale:
-                raise NotFoundError("Venta no encontrada.")
+            sale = self._sale_row(conn, actor, sale_id)
             if sale["status"] == "anulada":
                 raise ValidationError("La venta está anulada.")
             sale_lines = {r["id"]: r for r in conn.execute("SELECT * FROM sale_lines WHERE sale_id = ?", (sale_id,))}
@@ -313,7 +364,11 @@ class SalesService:
                 if qty_milli > available:
                     errors[f"lines.{i}"] = f"{ln['code']}: se pueden devolver como máximo {from_milli(available)}."
                     continue
-                picked.append((ln, qty_milli))
+                condition = item.get("condition") or "apto"
+                if condition not in CONDITIONS:
+                    errors[f"lines.{i}"] = "Estado del producto no válido."
+                    continue
+                picked.append((ln, qty_milli, condition))
             if errors:
                 raise ValidationError(next(iter(errors.values())), errors)
             if not picked:
@@ -321,7 +376,7 @@ class SalesService:
             today = local_today(self._tz())
             number = next_number(conn, "devolucion")
             computed = []
-            for ln, qty_milli in picked:
+            for ln, qty_milli, condition in picked:
                 prior = conn.execute("SELECT COALESCE(SUM(net_cents),0), COALESCE(SUM(tax_cents),0), COALESCE(SUM(qty_milli),0)"
                                      " FROM sale_return_lines WHERE sale_line_id = ?", (ln["id"],)).fetchone()
                 if prior[2] + qty_milli == ln["qty_milli"]:   # última devolución de la línea: lo que queda, sin residuos
@@ -330,7 +385,7 @@ class SalesService:
                     ratio = Decimal(qty_milli) / ln["qty_milli"]
                     net, tax = round_cents(ln["net_cents"] * ratio), round_cents(ln["tax_cents"] * ratio)
                 cost = round_cents(Decimal(ln["unit_cost_cents"]) * qty_milli / 1000)
-                computed.append((ln, qty_milli, net, tax, cost))
+                computed.append((ln, qty_milli, net, tax, cost, condition))
             total = sum(c[2] for c in computed)
             tax_total = sum(c[3] for c in computed)
             cost_total = sum(c[4] for c in computed)
@@ -354,14 +409,19 @@ class SalesService:
                 " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (number, idempotency_key, sale_id, reason[:300], refund_method["id"] if refund_method else None, total,
                  tax_total, cost_total, credit_applied, refund, str(today), actor.id, iso())).lastrowid
-            for ln, qty_milli, net, tax, cost in computed:
-                conn.execute("INSERT INTO sale_return_lines(return_id, sale_line_id, qty_milli, net_cents, tax_cents, cost_cents)"
-                             " VALUES (?,?,?,?,?,?)", (return_id, ln["id"], qty_milli, net, tax, cost))
+            cost_back = cost_lost = 0
+            for ln, qty_milli, net, tax, cost, condition in computed:
+                conn.execute("INSERT INTO sale_return_lines(return_id, sale_line_id, qty_milli, net_cents, tax_cents, cost_cents,"
+                             " condition) VALUES (?,?,?,?,?,?,?)", (return_id, ln["id"], qty_milli, net, tax, cost, condition))
                 conn.execute("UPDATE sale_lines SET returned_milli = returned_milli + ? WHERE id = ?", (qty_milli, ln["id"]))
-                product = conn.execute("SELECT * FROM products WHERE id = ?", (ln["product_id"],)).fetchone()
-                self.inventory.apply_movement(conn, actor, product, "devolucion", qty_milli,
-                                              f"Devolución {number} (venta {sale['number']}): {reason}", ln["unit_cost_cents"],
-                                              reference=("devolucion", return_id), allow_negative=True)
+                if condition == "apto":       # solo lo apto vuelve a estar disponible
+                    product = conn.execute("SELECT * FROM products WHERE id = ?", (ln["product_id"],)).fetchone()
+                    self.inventory.apply_movement(conn, actor, product, "devolucion", qty_milli,
+                                                  f"Devolución {number} (venta {sale['number']}): {reason}", ln["unit_cost_cents"],
+                                                  reference=("devolucion", return_id), allow_negative=True)
+                    cost_back += cost
+                elif condition == "no_apto":
+                    cost_lost += cost
             if credit_applied:
                 conn.execute("INSERT INTO receivable_credits(receivable_id, amount_cents, source_type, source_id, created_at)"
                              " VALUES (?,?,?,?,?)", (ar[0], credit_applied, "devolucion", return_id, iso()))
@@ -372,27 +432,71 @@ class SalesService:
                 lines.append(Line(ledger.RECEIVABLE, credit=credit_applied, party_type="cliente", party_id=sale["customer_id"]))
             ledger.post(conn, actor, today, f"Devolución {number} de la venta {sale['number']}", "devolucion", return_id, lines)
             ledger.post(conn, actor, today, f"Reingreso al inventario {number}", "devolucion", return_id,
-                        [Line(ledger.INVENTORY, debit=cost_total), Line(ledger.COGS, credit=cost_total)], purpose="costo")
-            record(conn, actor, "venta.devolucion", "sale", sale_id, {"devolucion": number, "total": total, "motivo": reason,
-                                                                     "reembolso": refund, "abono_cartera": credit_applied})
-            return {"duplicate": False, "return_id": return_id, **self._detail(conn, sale_id)}
+                        [Line(ledger.INVENTORY, debit=cost_back), Line(ledger.COGS, credit=cost_back)], purpose="costo")
+            ledger.post(conn, actor, today, f"Devolución {number}: producto no apto para la venta", "devolucion", return_id,
+                        [Line(ledger.INVENTORY_LOSS, debit=cost_lost), Line(ledger.COGS, credit=cost_lost)], purpose="merma")
+            record(conn, actor, "venta.devolucion", "sale", sale_id, {
+                "devolucion": number, "total": total, "motivo": reason, "reembolso": refund, "abono_cartera": credit_applied,
+                "estados": {c[0]["code"]: c[5] for c in computed}, "costo_reingresado": cost_back, "costo_perdido": cost_lost})
+            result = {"duplicate": False, "return_id": return_id, **self._detail(conn, sale_id)}
+        self.inventory.scopes.notify(sale["group_id"], "devolucion", sale=sale_id, products=[c[0]["product_id"] for c in computed])
+        return result
+
+    def resolve_return_line(self, actor: Actor, line_id: int, condition: str, note: str = "") -> dict:
+        """Decide qué pasa con un producto devuelto que quedó «pendiente de revisión»."""
+        actor.require("ventas.anular")
+        if condition not in ("apto", "no_apto"):
+            raise ValidationError("Elija si el producto es apto o no apto para la venta.", {"condition": "Valor no válido."})
+        with self.db.tx() as conn:
+            row = conn.execute(
+                "SELECT rl.*, r.number, r.sale_id, sl.product_id, sl.unit_cost_cents, sl.code FROM sale_return_lines rl"
+                " JOIN sale_returns r ON r.id = rl.return_id JOIN sale_lines sl ON sl.id = rl.sale_line_id WHERE rl.id = ?",
+                (line_id,)).fetchone()
+            if not row:
+                raise NotFoundError("Devolución no encontrada.")
+            sale = self._sale_row(conn, actor, row["sale_id"])
+            if row["condition"] != "revision":
+                raise ValidationError("Este producto devuelto ya fue revisado.")
+            today = local_today(self._tz())
+            conn.execute("UPDATE sale_return_lines SET condition = ?, resolved_at = ?, resolved_by = ? WHERE id = ?",
+                         (condition, iso(), actor.id, line_id))
+            text = f"Revisión de la devolución {row['number']} (venta {sale['number']})" + (f": {note.strip()[:200]}" if note.strip() else "")
+            if condition == "apto":
+                product = conn.execute("SELECT * FROM products WHERE id = ?", (row["product_id"],)).fetchone()
+                self.inventory.apply_movement(conn, actor, product, "devolucion", row["qty_milli"], text, row["unit_cost_cents"],
+                                              reference=("devolucion", row["return_id"]), allow_negative=True)
+                ledger.post(conn, actor, today, f"Reingreso tras revisión {row['number']}", "devolucion_linea", line_id,
+                            [Line(ledger.INVENTORY, debit=row["cost_cents"]), Line(ledger.COGS, credit=row["cost_cents"])],
+                            purpose="revision")
+            else:
+                ledger.post(conn, actor, today, f"Producto devuelto no apto {row['number']}", "devolucion_linea", line_id,
+                            [Line(ledger.INVENTORY_LOSS, debit=row["cost_cents"]), Line(ledger.COGS, credit=row["cost_cents"])],
+                            purpose="revision")
+            record(conn, actor, "venta.devolucion_revisada", "sale", row["sale_id"],
+                   {"devolucion": row["number"], "producto": row["code"], "estado": condition, "nota": note.strip()[:200]})
+            result = self._detail(conn, row["sale_id"])
+        self.inventory.scopes.notify(sale["group_id"], "devolucion", sale=row["sale_id"], products=[row["product_id"]])
+        return result
 
     # ------------------------------------------------------------------ resumen del día
-    def day_summary(self, actor: Actor, day: str | None = None) -> dict:
+    def day_summary(self, actor: Actor, day: str | None = None, inventory: str | None = None) -> dict:
         actor.require("ventas.historial")
         target = str(parse_date(day)) if day else str(local_today(self._tz()))
         with self.db.read() as conn:
+            g = self.inventory.scopes.resolve(conn, actor, inventory)
             totals = dict(conn.execute(
                 "SELECT COUNT(*) AS sales, COALESCE(SUM(total_cents), 0) AS total_cents, COALESCE(SUM(credit_cents), 0)"
-                " AS credit_cents FROM sales WHERE sale_date = ? AND status = 'completada'", (target,)).fetchone())
+                " AS credit_cents FROM sales WHERE sale_date = ? AND status = 'completada' AND group_id IS ?", (target, g)).fetchone())
             totals["by_method"] = [dict(r) for r in conn.execute(
                 "SELECT m.name, m.kind, COALESCE(SUM(sp.amount_cents), 0) AS amount_cents, COUNT(*) AS count"
                 " FROM sale_payments sp JOIN sales s ON s.id = sp.sale_id JOIN payment_methods m ON m.id = sp.method_id"
-                " WHERE s.sale_date = ? AND s.status = 'completada' GROUP BY m.id ORDER BY m.sort_order", (target,))]
-            totals["returns_cents"] = conn.execute("SELECT COALESCE(SUM(total_cents), 0) FROM sale_returns WHERE return_date = ?",
-                                                   (target,)).fetchone()[0]
-            totals["voided"] = conn.execute("SELECT COUNT(*) FROM sales WHERE sale_date = ? AND status = 'anulada'",
-                                            (target,)).fetchone()[0]
+                " WHERE s.sale_date = ? AND s.status = 'completada' AND s.group_id IS ? GROUP BY m.id ORDER BY m.sort_order",
+                (target, g))]
+            totals["returns_cents"] = conn.execute(
+                "SELECT COALESCE(SUM(r.total_cents), 0) FROM sale_returns r JOIN sales s ON s.id = r.sale_id"
+                " WHERE r.return_date = ? AND s.group_id IS ?", (target, g)).fetchone()[0]
+            totals["voided"] = conn.execute("SELECT COUNT(*) FROM sales WHERE sale_date = ? AND status = 'anulada' AND group_id IS ?",
+                                            (target, g)).fetchone()[0]
         totals["date"] = target
         return totals
 

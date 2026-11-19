@@ -99,3 +99,15 @@
   .print-area { display: block !important; }
   .receipt-paper, .preview-sheet { border: 0; padding: 0; }
 }
+
+/* Inventario elegido y estado de sincronización (barra superior) */
+.inventory-switch select { min-height: 40px; padding-block: 4px; max-width: 220px; }
+.inventory-chip { font-weight: 600; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sync-status { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+@media (max-width: 720px) {
+  .sync-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .topbar-title { min-width: 0; flex: 1 1 auto; }
+  .topbar-actions { gap: 6px; flex-shrink: 0; }
+  .inventory-chip { display: none; }   /* en el teléfono el inventario se ve en el título de la página */
+  .inventory-switch select { max-width: 112px; padding-inline: 6px; }
+}

@@ -39,6 +39,20 @@ export function isReachable(): boolean {
   return serverReachable;
 }
 
+/**
+ * Inventario elegido en la interfaz («general» o el id público de un grupo). Se envía en la cabecera
+ * X-Inventory de cada petición; el servidor valida en cada operación que la persona pueda entrar a él.
+ */
+let inventoryKey: string | null = null;
+
+export function setInventoryKey(key: string | null) {
+  inventoryKey = key;
+}
+
+export function getInventoryKey(): string | null {
+  return inventoryKey;
+}
+
 export function onUnauthorized(handler: () => void) {
   unauthorizedHandler = handler;
 }
@@ -61,6 +75,7 @@ export async function api<T = any>(path: string, opts: RequestOptions = {}): Pro
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (method !== 'GET') headers['X-Requested-With'] = 'pos-py';
   if (opts.idempotencyKey) headers['Idempotency-Key'] = opts.idempotencyKey;
+  if (inventoryKey) headers['X-Inventory'] = inventoryKey;
   let body: BodyInit | undefined;
   if (opts.form) body = opts.form;
   else if (opts.body !== undefined) {
@@ -106,7 +121,9 @@ export function qs(params: Record<string, unknown>): string {
 
 /** Descarga un archivo de la API (Excel, CSV, PDF, copia de seguridad) conservando la sesión. */
 export async function download(path: string, fallbackName: string) {
-  const response = await fetch(`/api${path}`, { credentials: 'same-origin' });
+  const response = await fetch(`/api${path}`, {
+    credentials: 'same-origin', headers: inventoryKey ? { 'X-Inventory': inventoryKey } : undefined,
+  });
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
     throw new ApiError(response.status, data.error ?? 'Error', data.detail ?? 'No se pudo descargar el archivo.');

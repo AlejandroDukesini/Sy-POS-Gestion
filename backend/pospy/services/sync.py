@@ -253,7 +253,7 @@ class SyncService:
                 "suggested_custom": suggested_custom, "types": TYPES,
                 "can_create_columns": actor.can("inventario.columnas")}
 
-    def preview_upload(self, actor: Actor, filename: str, content: bytes, options: dict) -> dict:
+    def preview_upload(self, actor: Actor, filename: str, content: bytes, options: dict, inventory: str | None = None) -> dict:
         actor.require("inventario.importar")
         if not actor.can("inventario.editar"):
             actor.require("inventario.editar")
@@ -264,6 +264,8 @@ class SyncService:
         if opts["adjust_stock"]:
             actor.require("inventario.movimientos")
         opts["custom"] = self._custom_plan(actor, options.get("custom") or [])
+        with self.db.read() as conn:     # el archivo se importa al inventario elegido (general o del grupo)
+            opts["group_id"] = self.inventory.scopes.resolve(conn, actor, inventory)
         return self._preview(actor, None, SourceFile(Path(filename).name, content), opts, "archivo",
                              f"Archivo {Path(filename).name}")
 
@@ -369,7 +371,8 @@ class SyncService:
                 continue
             v = rec.values
             product = conn.execute("SELECT p.*, c.name AS category FROM products p LEFT JOIN categories c"
-                                   " ON c.id = p.category_id WHERE p.code = ?", (rec.code,)).fetchone()
+                                   " ON c.id = p.category_id WHERE p.code = ? AND p.group_id IS ?",
+                                   (rec.code, opts.get("group_id"))).fetchone()
             if v.get("unit") and v["unit"] not in UNITS:
                 invalid.append({"row": rec.row, "code": rec.code, "errors": [f"Unidad «{v['unit']}» no reconocida."]})
                 continue
@@ -434,9 +437,11 @@ class SyncService:
         if not (actor.can("gestion.integraciones") or actor.can("inventario.importar")):
             actor.require("inventario.importar")
         with self.db.read() as conn:
-            return [self._run_public(dict(r), brief=True) for r in conn.execute(
+            allowed = {o["group_id"] for o in self.inventory.scopes.accessible(conn, actor)}
+            rows = [dict(r) for r in conn.execute(
                 "SELECT r.*, u.username FROM sync_runs r LEFT JOIN users u ON u.id = r.user_id ORDER BY r.id DESC LIMIT ?",
                 (min(200, limit),))]
+        return [self._run_public(r, brief=True) for r in rows if _run_group(r) in allowed]
 
     def run(self, actor: Actor, run_id: int) -> dict:
         if not (actor.can("gestion.integraciones") or actor.can("inventario.importar")):
@@ -446,6 +451,9 @@ class SyncService:
                                (run_id,)).fetchone()
         if not row:
             raise NotFoundError("Proceso de importación no encontrado.")
+        if actor is not SYSTEM:
+            with self.db.read() as conn:
+                self.inventory.scopes.check(conn, actor, _run_group(dict(row)), "Proceso de importación")
         return self._run_public(dict(row))
 
     @staticmethod
@@ -467,6 +475,10 @@ class SyncService:
             raise ValidationError("Esta vista previa ya fue aplicada o descartada. Genere otra.")
         summary = json.loads(run["summary"])
         opts = summary["options"]
+        group_id = opts.get("group_id")
+        if actor is not SYSTEM:
+            with self.db.read() as conn:
+                self.inventory.scopes.check(conn, actor, group_id, "Proceso de importación")
         if opts.get("create_missing") or opts.get("update_catalog"):
             if actor is not SYSTEM:
                 actor.require("inventario.editar")
@@ -528,12 +540,14 @@ class SyncService:
                              (iso(), "ok" if not applied["errors"] else "con_errores", msg, run["connection_id"]))
             record(conn, actor, "inventario.importacion_aplicada", "sync_run", run_id,
                    {"fuente": label, **{k: v for k, v in applied.items() if k != "errors"}, "errores": len(applied["errors"])})
+        self.inventory.scopes.notify(group_id, "importacion", run=run_id)
         return self.run(actor, run_id)
 
     def _apply_record(self, conn: sqlite3.Connection, actor: Actor, rec: tabular.Record, opts: dict, label: str,
                       applied: dict) -> None:
         v = rec.values
-        product = conn.execute("SELECT * FROM products WHERE code = ?", (rec.code,)).fetchone()
+        group_id = opts.get("group_id")
+        product = conn.execute("SELECT * FROM products WHERE code = ? AND group_id IS ?", (rec.code, group_id)).fetchone()
         category_id = self._category(conn, v["category"]) if v.get("category") else None
         if product is None:
             if not opts["create_missing"]:
@@ -543,7 +557,7 @@ class SyncService:
                     "discount_price": v.get("discount_price"), "cost": v.get("cost", 0), "tax_rate": v.get("tax_rate", 0),
                     "min_stock": v.get("min_stock"), "unit": v.get("unit") or "und", "category_id": category_id,
                     "custom": rec.custom, "_import": True}
-            pid = self.inventory.create_conn(conn, actor, data)
+            pid = self.inventory.create_conn(conn, actor, data, group_id)
             stock = v.get("stock")
             if stock is not None and stock > 0:
                 p = conn.execute("SELECT * FROM products WHERE id = ?", (pid,)).fetchone()
@@ -586,6 +600,7 @@ class SyncService:
     def discard(self, actor: Actor, run_id: int) -> dict:
         if not (actor.can("gestion.integraciones") or actor.can("inventario.importar")):
             actor.require("inventario.importar")
+        self.run(actor, run_id)          # comprueba que la importación sea de un inventario accesible
         with self.db.tx() as conn:
             if not conn.execute("UPDATE sync_runs SET status = 'descartada', finished_at = ? WHERE id = ? AND status = 'vista_previa'",
                                 (iso(), run_id)).rowcount:
@@ -620,6 +635,14 @@ class SyncService:
                 log.exception("Error inesperado al sincronizar la conexión %s", c["id"])
                 self._mark(c["id"], "error", "Error inesperado; revise el registro del servidor.")
         return done
+
+
+def _run_group(run: dict) -> int | None:
+    """Inventario de una importación (las de conexiones y las anteriores a los grupos: el general)."""
+    try:
+        return (json.loads(run["summary"] or "{}").get("options") or {}).get("group_id")
+    except (TypeError, ValueError):
+        return None
 
 
 def _coerce_custom(records: list[tabular.Record], defs: dict[str, dict]) -> None:

@@ -25,6 +25,7 @@ from .services.printing import PrintingService
 from .services.realtime import RealtimeHub
 from .services.reports import ReportService
 from .services.sales import SalesService
+from .services.scopes import InventoryScopes
 from .services.suppliers import SupplierService
 from .services.sync import SyncService
 from .services.tasks import TaskService
@@ -50,11 +51,12 @@ class AppContext:
         self.suppliers = SupplierService(self.db, self.settings, config.data_dir)
         self.prefs = PrefsService(self.db)
         self.catalog = CatalogService(self.db)
-        self.inventory = InventoryService(self.db, self.settings)
-        self.observations = ObservationService(self.db, self.settings, config.data_dir)
+        self.scopes = InventoryScopes(self.db, self.realtime)
+        self.inventory = InventoryService(self.db, self.settings, self.scopes)
+        self.observations = ObservationService(self.db, self.settings, config.data_dir, self.scopes)
         self.sales = SalesService(self.db, self.settings, self.inventory)
         self.printing = PrintingService(self.db, self.settings, self.sales)
-        self.documents = DocumentService(self.db, self.settings, config, self.printing)
+        self.documents = DocumentService(self.db, self.settings, config, self.printing, self.scopes)
         self.receivables = OpenItems(self.db, self.settings, AR)
         self.payables = OpenItems(self.db, self.settings, AP)
         self.finance = FinanceService(self.db, self.settings)

@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse, Response
 from ...context import AppContext
 from ...core.actor import Actor
 from ...core.errors import ValidationError
-from ..deps import actor, ctx, optional_idempotency_key
+from ..deps import actor, ctx, inventory_key, optional_idempotency_key
 from ..models import Capacity, Document, DocumentType, FieldAssignment, PrintRequest, Reason
 from ..serialize import out
 
@@ -66,16 +66,16 @@ def capacity(type_id: int, body: Capacity, current: Actor = Depends(actor), app:
 
 @router.get("/documents")
 def list_documents(type_id: int | None = None, q: str = "", status: str = "", page: int = 1, page_size: int = 50,
-                   current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
-    return out(app.documents.list(current, type_id, q, status, page, page_size))
+                   inv: str | None = Depends(inventory_key), current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    return out(app.documents.list(current, type_id, q, status, page, page_size, inv))
 
 
 @router.post("/documents")
-def create_document(body: Document, key: str | None = Depends(optional_idempotency_key), current: Actor = Depends(actor),
-                    app: AppContext = Depends(ctx)):
+def create_document(body: Document, key: str | None = Depends(optional_idempotency_key),
+                    inv: str | None = Depends(inventory_key), current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
     if not body.type_id:
         raise ValidationError("Seleccione el tipo de documento.", {"type_id": "Tipo obligatorio."})
-    return out(app.documents.create(current, body.model_dump(), key))
+    return out(app.documents.create(current, body.model_dump(), key, inv))
 
 
 @router.get("/documents/{doc_id}")

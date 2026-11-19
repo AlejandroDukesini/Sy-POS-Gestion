@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ApiError, get, isReachable, onConnectivity } from '../api/client';
+import { ApiError, get, getInventoryKey, isReachable, onConnectivity } from '../api/client';
+import { useRealtimeEvents } from './realtime';
+
+/** Datos que dependen del inventario elegido: se recargan solos cuando otra persona lo cambia. */
+const LIVE_INVENTORY = /^\/(products|movements|inventory|sales|observations|documents)(\/|\?|$)/;
 
 export interface Resource<T> {
   data: T | undefined;
@@ -37,6 +41,10 @@ export function useApi<T = any>(path: string | null): Resource<T> {
   }, [path, tick]);
 
   const reload = useCallback(() => setTick((t) => t + 1), []);
+  useRealtimeEvents((e) => {
+    if (!path || !LIVE_INVENTORY.test(path)) return;
+    if (e.type === 'resync' || (e.type === 'inventario' && (!e.inventory || e.inventory === getInventoryKey()))) reload();
+  });
   return { data, error, loading, reload };
 }
 

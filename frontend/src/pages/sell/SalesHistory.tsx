@@ -12,6 +12,7 @@ import { useAuth } from '../../context/Auth';
 import { useToast } from '../../context/Toast';
 import { date, dateTime, money, qty, toApiNumber } from '../../lib/format';
 import { useApi, useDebounced } from '../../lib/hooks';
+import { CONDITION_LABELS } from '../inventory/returnLabels';
 import { printReceipt } from './receipt';
 
 export function SalesHistory() {
@@ -53,7 +54,7 @@ export function SalesHistory() {
                   { key: 'number', header: 'Número', render: (s: any) => <strong>{s.number}</strong> },
                   { key: 'date', header: 'Fecha', render: (s: any) => dateTime(s.created_at) },
                   { key: 'customer', header: 'Cliente', render: (s: any) => s.customer_name || <span className="muted">Consumidor final</span> },
-                  { key: 'user', header: 'Vendedor', render: (s: any) => s.username },
+                  { key: 'user', header: 'Vendedor', render: (s: any) => s.seller_name || s.username },
                   { key: 'status', header: 'Estado', render: (s: any) => (
                     <span className="row" style={{ gap: 6 }}><StatusBadge status={s.status} />
                       {Number(s.returned) > 0 && <span className="badge badge-info">Con devolución</span>}
@@ -128,7 +129,12 @@ export function SaleDetail() {
         </>
       } />
       <ErrorAlert error={error} />
-      {s.status === 'anulada' && <Alert kind="danger" title="Venta anulada">{s.void_reason} · {dateTime(s.voided_at)}</Alert>}
+      {s.status === 'anulada' && (
+        <Alert kind="danger" title="Venta anulada">
+          {s.void_reason} · {dateTime(s.voided_at)}{s.voided_by_name ? ` · anulada por ${s.voided_by_name}` : ''}. Las unidades
+          volvieron al inventario con movimientos compensatorios. La anulación no registra un reembolso de dinero.
+        </Alert>
+      )}
       <Card title="Productos">
         <DataTable caption="Productos de la venta" rows={s.lines} rowKey={(l: any) => l.id} columns={[
           { key: 'p', header: 'Producto', render: (l: any) => <><strong>{l.code}</strong> {l.description}</> },
@@ -171,6 +177,9 @@ export function SaleDetail() {
             { key: 'n', header: 'Número', render: (r: any) => r.number },
             { key: 'd', header: 'Fecha', render: (r: any) => dateTime(r.created_at) },
             { key: 'm', header: 'Motivo', render: (r: any) => r.reason },
+            { key: 'p', header: 'Productos y estado', render: (r: any) => (
+              <ul className="plain-list">{(r.lines ?? []).map((l: any) => (
+                <li key={l.id}><strong>{l.code}</strong> × {qty(l.qty)} · {CONDITION_LABELS[l.condition] ?? l.condition}</li>))}</ul>) },
             { key: 'f', header: 'Reembolso', render: (r: any) => (Number(r.refund) ? `${money(r.refund)} (${r.refund_method_name})` : '—') },
             { key: 'c', header: 'Abono a cartera', numeric: true, render: (r: any) => (Number(r.credit_applied) ? money(r.credit_applied) : '—') },
             { key: 't', header: 'Total', numeric: true, render: (r: any) => money(r.total) },
@@ -179,7 +188,7 @@ export function SaleDetail() {
       )}
       <ConfirmDialog open={voiding} title={`Anular venta ${s.number}`} danger requireReason busy={busy} confirmLabel="Anular venta"
         onClose={() => setVoiding(false)} onConfirm={doVoid}
-        message="Las unidades vuelven al inventario y se registra el reverso contable. La venta se conserva marcada como anulada." />
+        message="Las unidades vuelven al inventario con movimientos compensatorios y se registra el reverso contable. La venta y su salida original se conservan; la venta queda marcada como anulada. Si el cliente pagó, la devolución del dinero se registra aparte (devolución con reembolso o en Finanzas)." />
       {returning && <ReturnDialog sale={s} methods={methods.data ?? []} onClose={() => setReturning(false)}
         onDone={() => { setReturning(false); sale.reload(); }} />}
     </div>
@@ -190,6 +199,7 @@ function ReturnDialog({ sale, methods, onClose, onDone }: { sale: any; methods: 
   const { notify } = useToast();
   const key = useMemo(newKey, []);
   const [qtys, setQtys] = useState<Record<number, string>>({});
+  const [conds, setConds] = useState<Record<number, string>>({});
   const [reason, setReason] = useState('');
   const [method, setMethod] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -199,7 +209,7 @@ function ReturnDialog({ sale, methods, onClose, onDone }: { sale: any; methods: 
     const e: Record<string, string> = {};
     if (!reason.trim()) e.reason = 'Escriba el motivo.';
     const lines = Object.entries(qtys).filter(([, v]) => Number(toApiNumber(v)) > 0)
-      .map(([id, v]) => ({ sale_line_id: Number(id), qty: toApiNumber(v) }));
+      .map(([id, v]) => ({ sale_line_id: Number(id), qty: toApiNumber(v), condition: conds[Number(id)] ?? 'apto' }));
     if (!lines.length) e.lines = 'Indique al menos una cantidad.';
     setErrors(e);
     if (Object.keys(e).length) return;
@@ -207,7 +217,8 @@ function ReturnDialog({ sale, methods, onClose, onDone }: { sale: any; methods: 
     setError(null);
     try {
       await post(`/sales/${sale.id}/returns`, { reason: reason.trim(), lines, refund_method_id: method ? Number(method) : null }, key);
-      notify('success', 'Devolución registrada', 'Las unidades volvieron al inventario.');
+      notify('success', 'Devolución registrada', lines.every((l) => l.condition === 'apto')
+        ? 'Las unidades volvieron al inventario.' : 'Solo las unidades «aptas» volvieron al inventario.');
       onDone();
     } catch (err) {
       setError(err as ApiError);
@@ -225,7 +236,7 @@ function ReturnDialog({ sale, methods, onClose, onDone }: { sale: any; methods: 
       <div className="table-wrap">
         <table className="table">
           <caption className="sr-only">Cantidades a devolver</caption>
-          <thead><tr><th>Producto</th><th className="num">Vendido</th><th className="num">Ya devuelto</th><th className="num">Devolver</th></tr></thead>
+          <thead><tr><th>Producto</th><th className="num">Vendido</th><th className="num">Ya devuelto</th><th className="num">Devolver</th><th>Estado del producto</th></tr></thead>
           <tbody>
             {sale.lines.map((l: any) => {
               const available = Number(l.qty) - Number(l.returned);
@@ -238,6 +249,14 @@ function ReturnDialog({ sale, methods, onClose, onDone }: { sale: any; methods: 
                     <input className="input num" style={{ width: 100 }} inputMode="decimal" disabled={available <= 0}
                       aria-label={`Cantidad a devolver de ${l.code} (máximo ${available})`} value={qtys[l.id] ?? ''}
                       onChange={(e) => setQtys((q) => ({ ...q, [l.id]: e.target.value }))} placeholder="0" />
+                  </td>
+                  <td>
+                    <select className="input" disabled={available <= 0} aria-label={`Estado del producto devuelto ${l.code}`}
+                      value={conds[l.id] ?? 'apto'} onChange={(e) => setConds((c) => ({ ...c, [l.id]: e.target.value }))}>
+                      <option value="apto">Apto: vuelve al inventario</option>
+                      <option value="revision">Pendiente de revisión</option>
+                      <option value="no_apto">No apto para la venta</option>
+                    </select>
                   </td>
                 </tr>
               );

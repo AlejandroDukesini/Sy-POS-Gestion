@@ -99,6 +99,11 @@ def actor(request: Request, current: Actor = Depends(actor_any)) -> Actor:
     return current
 
 
+def inventory_key(x_inventory: str | None = Header(default=None)) -> str | None:
+    """Inventario elegido en la interfaz («general» o id público del grupo). El servicio valida el acceso."""
+    return (x_inventory or "").strip()[:20] or None
+
+
 def idempotency_key(idempotency_key: str | None = Header(default=None)) -> str:
     if not idempotency_key or not 8 <= len(idempotency_key) <= 80:
         raise ValidationError("Falta la cabecera Idempotency-Key de la operación.")

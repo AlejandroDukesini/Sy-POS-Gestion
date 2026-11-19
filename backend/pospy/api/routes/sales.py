@@ -5,8 +5,8 @@ from fastapi import APIRouter, Depends
 
 from ...context import AppContext
 from ...core.actor import Actor
-from ..deps import actor, ctx, idempotency_key
-from ..models import BrowserPrintLog, Checkout, Party, PrintRequest, Quote, Reason, SaleReturn
+from ..deps import actor, ctx, idempotency_key, inventory_key
+from ..models import BrowserPrintLog, Checkout, Party, PrintRequest, Quote, Reason, ReturnReview, SaleReturn
 from ..serialize import out
 
 router = APIRouter(tags=["ventas"])
@@ -37,13 +37,20 @@ def checkout(body: Checkout, key: str = Depends(idempotency_key), current: Actor
 
 @router.get("/sales")
 def list_sales(q: str = "", status: str = "", date_from: str = "", date_to: str = "", page: int = 1, page_size: int = 50,
-               current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
-    return out(app.sales.list(current, q, status, date_from, date_to, page, page_size))
+               user_id: int | None = None, inv: str | None = Depends(inventory_key), current: Actor = Depends(actor),
+               app: AppContext = Depends(ctx)):
+    return out(app.sales.list(current, q, status, date_from, date_to, page, page_size, inv, user_id))
+
+
+@router.post("/sales/returns/lines/{line_id}/resolve")
+def resolve_return(line_id: int, body: ReturnReview, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    return out(app.sales.resolve_return_line(current, line_id, body.condition, body.note or ""))
 
 
 @router.get("/sales/summary")
-def day_summary(day: str | None = None, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
-    return out(app.sales.day_summary(current, day))
+def day_summary(day: str | None = None, inv: str | None = Depends(inventory_key), current: Actor = Depends(actor),
+                app: AppContext = Depends(ctx)):
+    return out(app.sales.day_summary(current, day, inv))
 
 
 @router.get("/sales/{sale_id}")

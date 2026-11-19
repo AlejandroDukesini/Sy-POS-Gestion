@@ -263,6 +263,12 @@ class Reason(Strict):
 class ReturnLine(Strict):
     sale_line_id: int
     qty: Num
+    condition: Literal["apto", "revision", "no_apto"] = "apto"   # apto vuelve al inventario; revision espera; no_apto no vuelve
+
+
+class ReturnReview(Strict):
+    condition: Literal["apto", "no_apto"]
+    note: str | None = Field(default="", max_length=200)
 
 
 class SaleReturn(Strict):

@@ -10,7 +10,7 @@ from ...context import AppContext
 from ...core.actor import Actor
 from ...core.errors import ValidationError
 from ...services.inventory import ENTRY_COUNTERPARTS, EXIT_COUNTERPARTS, UNITS
-from ..deps import actor, ctx, idempotency_key
+from ..deps import actor, ctx, idempotency_key, inventory_key
 from ..models import Category, ColumnOrder, InventoryColumnIn, InventoryColumnUpdate, Movement, Product
 from ..serialize import out
 
@@ -28,24 +28,46 @@ async def _read(file: UploadFile) -> bytes:
 @router.get("/products")
 def list_products(q: str = "", category_id: int | None = None, status: str = "activos", low_stock: bool = False,
                   sort: str | None = None, direction: str | None = None, page: int = 1, page_size: int = 50,
-                  current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
-    return out(app.inventory.list(current, q, category_id, status, low_stock, sort, direction, page, page_size))
+                  inv: str | None = Depends(inventory_key), current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    return out(app.inventory.list(current, q, category_id, status, low_stock, sort, direction, page, page_size, inv))
 
 
 @router.get("/products/lookup")
-def lookup(q: str, limit: int = 20, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
-    return out(app.inventory.lookup(current, q, limit))
+def lookup(q: str, limit: int = 20, inv: str | None = Depends(inventory_key), current: Actor = Depends(actor),
+           app: AppContext = Depends(ctx)):
+    return out(app.inventory.lookup(current, q, limit, inv))
 
 
 @router.get("/products/meta")
-def products_meta(current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+def products_meta(inv: str | None = Depends(inventory_key), current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
     return {"units": UNITS, "entry_counterparts": ENTRY_COUNTERPARTS, "exit_counterparts": EXIT_COUNTERPARTS,
-            "summary": out(app.inventory.summary(current))}
+            "summary": out(app.inventory.summary(current, inv))}
+
+
+# ------------------------------------------------------------------ inventarios (general y de cada grupo)
+@router.get("/inventories")
+def inventories(current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    with app.db.read() as conn:
+        return [{k: v for k, v in o.items() if k != "group_id"} for o in app.scopes.accessible(conn, current)]
+
+
+@router.get("/inventory/dashboard")
+def dashboard(date_from: str = "", date_to: str = "", product_id: int | None = None, user_id: int | None = None,
+              inv: str | None = Depends(inventory_key), current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    return out(app.inventory.dashboard(current, inv, date_from, date_to, product_id, user_id))
+
+
+@router.get("/inventory/returns")
+def returns(date_from: str = "", date_to: str = "", product_id: int | None = None, user_id: int | None = None,
+            condition: str = "", page: int = 1, page_size: int = 50, inv: str | None = Depends(inventory_key),
+            current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    return out(app.inventory.returns(current, inv, date_from, date_to, product_id, user_id, condition, page, page_size))
 
 
 @router.get("/products/export")
-def export(fmt: str = "xlsx", current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
-    data, name, mime = app.inventory.export(current, "csv" if fmt == "csv" else "xlsx")
+def export(fmt: str = "xlsx", inv: str | None = Depends(inventory_key), current: Actor = Depends(actor),
+           app: AppContext = Depends(ctx)):
+    data, name, mime = app.inventory.export(current, "csv" if fmt == "csv" else "xlsx", inv)
     return Response(data, media_type=mime, headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
@@ -92,8 +114,9 @@ def get_product(product_id: int, current: Actor = Depends(actor), app: AppContex
 
 
 @router.post("/products")
-def create_product(body: Product, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
-    return out(app.inventory.create(current, body.data()))
+def create_product(body: Product, inv: str | None = Depends(inventory_key), current: Actor = Depends(actor),
+                   app: AppContext = Depends(ctx)):
+    return out(app.inventory.create(current, body.data(), inv))
 
 
 @router.put("/products/{product_id}")
@@ -111,8 +134,9 @@ def movement(product_id: int, body: Movement, key: str = Depends(idempotency_key
 
 @router.get("/movements")
 def movements(product_id: int | None = None, kind: str = "", date_from: str = "", date_to: str = "", page: int = 1,
-              page_size: int = 50, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
-    return out(app.inventory.history(current, product_id, kind, date_from, date_to, page, page_size))
+              page_size: int = 50, category: str = "", user_id: int | None = None, inv: str | None = Depends(inventory_key),
+              current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    return out(app.inventory.history(current, product_id, kind, date_from, date_to, page, page_size, inv, category, user_id))
 
 
 @router.get("/categories")
@@ -138,13 +162,13 @@ async def inspect(file: UploadFile = File(...), sheet: str = Form(""), header_ro
 
 
 @router.post("/imports/preview")
-async def preview(file: UploadFile = File(...), options: str = Form("{}"), current: Actor = Depends(actor),
-                  app: AppContext = Depends(ctx)):
+async def preview(file: UploadFile = File(...), options: str = Form("{}"), inv: str | None = Depends(inventory_key),
+                  current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
     try:
         opts = json.loads(options)
     except json.JSONDecodeError:
         raise ValidationError("Opciones de importación no válidas.") from None
-    return app.sync.preview_upload(current, file.filename or "archivo.xlsx", await _read(file), opts)
+    return app.sync.preview_upload(current, file.filename or "archivo.xlsx", await _read(file), opts, inv)
 
 
 @router.get("/imports")

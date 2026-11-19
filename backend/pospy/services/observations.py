@@ -27,6 +27,7 @@ from ..core.errors import ConflictError, NotFoundError, PermissionDenied, Valida
 from ..core.money import parse_decimal, to_milli
 from ..core.query import like, paginate
 from ..core.settings import Settings
+from .scopes import InventoryScopes
 from .suppliers import _check_signature, safe_filename
 
 PRIORITIES = ("baja", "media", "alta", "critica")
@@ -65,8 +66,9 @@ BASE_SQL = (
 
 
 class ObservationService:
-    def __init__(self, db, settings: Settings, data_dir: Path):
+    def __init__(self, db, settings: Settings, data_dir: Path, scopes: InventoryScopes | None = None):
         self.db = db
+        self.scopes = scopes or InventoryScopes(db)
         self.settings = settings
         self.root = Path(data_dir) / "observaciones"
 
@@ -89,7 +91,7 @@ class ObservationService:
                 "max_file_mb": MAX_FILE_MB, "max_files": MAX_FILES, "file_types": sorted(FILE_TYPES),
                 "recent_days": RECENT_DAYS}
 
-    def product_search(self, actor: Actor, q: str, limit: int = 15) -> list[dict]:
+    def product_search(self, actor: Actor, q: str, limit: int = 15, inventory: str | None = None) -> list[dict]:
         """Busca productos existentes por nombre, código (SKU / código de barras) o referencia externa.
         Incluye inactivos (p. ej., descontinuados) para poder documentarlos; se marcan en la respuesta."""
         actor.require("observaciones.ver")
@@ -97,12 +99,13 @@ class ObservationService:
         if not q:
             return []
         with self.db.read() as conn:
+            group_id = self.scopes.resolve(conn, actor, inventory)
             rows = conn.execute(
                 "SELECT p.id, p.code, p.description, p.unit, p.active, p.external_ref FROM products p"
-                " WHERE p.code = ? COLLATE NOCASE OR p.code LIKE ? ESCAPE '\\' OR p.description LIKE ? ESCAPE '\\'"
-                " OR COALESCE(p.external_ref, '') LIKE ? ESCAPE '\\'"
+                " WHERE p.group_id IS ? AND (p.code = ? COLLATE NOCASE OR p.code LIKE ? ESCAPE '\\' OR p.description LIKE ? ESCAPE '\\'"
+                " OR COALESCE(p.external_ref, '') LIKE ? ESCAPE '\\')"
                 " ORDER BY (p.code = ? COLLATE NOCASE) DESC, p.active DESC, p.description COLLATE NOCASE LIMIT ?",
-                (q, like(q), like(q), like(q), q, min(30, max(1, int(limit))))).fetchall()
+                (group_id, q, like(q), like(q), like(q), q, min(30, max(1, int(limit))))).fetchall()
         return [dict(r) for r in rows]
 
     def product_context(self, actor: Actor, product_id: int) -> dict:
@@ -112,11 +115,12 @@ class ObservationService:
             return self._product_context(conn, actor, product_id)
 
     def _product_context(self, conn: sqlite3.Connection, actor: Actor, product_id: int) -> dict:
-        row = conn.execute("SELECT p.id, p.code, p.description, p.unit, p.active, p.external_ref, p.stock_milli,"
+        row = conn.execute("SELECT p.id, p.group_id, p.code, p.description, p.unit, p.active, p.external_ref, p.stock_milli,"
                            " p.min_stock_milli, p.cost_cents, c.name AS category_name FROM products p"
                            " LEFT JOIN categories c ON c.id = p.category_id WHERE p.id = ?", (product_id,)).fetchone()
         if not row:
             raise NotFoundError("Producto no encontrado.", {"product_id": "Seleccione un producto del inventario."})
+        self.scopes.check(conn, actor, row["group_id"])
         product = dict(row)
         if not (actor.can("inventario.costos")):
             product.pop("cost_cents")
@@ -153,9 +157,12 @@ class ObservationService:
         return {str(r[0]): {"open": r[1], "critical": r[2]} for r in rows}
 
     # ------------------------------------------------------------------ consulta, filtros e indicadores
-    def list(self, actor: Actor, filters: dict, sort: str = "recientes", page: int = 1, page_size: int = 25) -> dict:
+    def list(self, actor: Actor, filters: dict, sort: str = "recientes", page: int = 1, page_size: int = 25,
+             inventory: str | None = None) -> dict:
         actor.require("observaciones.ver")
-        where, params = ["o.deleted_at IS NULL"], []
+        with self.db.read() as conn:
+            group_id = self.scopes.resolve(conn, actor, inventory)
+        where, params = ["o.deleted_at IS NULL", "p.group_id IS ?"], [group_id]
         q = str(filters.get("q") or "").strip()[:80]
         if q:
             explicit_id = re.fullmatch(r"(?i)(?:obs[-\s]?|#)0*(\d{1,9})", q)   # «OBS-00012» o «#12»: solo el id
@@ -215,27 +222,28 @@ class ObservationService:
         with self.db.read() as conn:
             result = paginate(conn, sql, params, sort="s", direction=direction, sortable={"s": column}, default_sort="s",
                               page=page, page_size=page_size, tiebreak="o.id")
-            result["metrics"] = self._metrics(conn, recent_since)
+            result["metrics"] = self._metrics(conn, recent_since, group_id)
         today = self._today().isoformat()
         for item in result["items"]:
             _flags(item, today)
         return result
 
-    def _metrics(self, conn: sqlite3.Connection, recent_since: str) -> dict:
+    def _metrics(self, conn: sqlite3.Connection, recent_since: str, group_id: int | None = None) -> dict:
         r = conn.execute(
             "SELECT COUNT(*), COUNT(*) FILTER (WHERE status = 'pendiente'), COUNT(*) FILTER (WHERE status = 'en_proceso'),"
             " COUNT(*) FILTER (WHERE status = 'resuelta'), COUNT(*) FILTER (WHERE status = 'cerrada'),"
             " COUNT(*) FILTER (WHERE priority = 'critica' AND status IN ('pendiente','en_proceso')),"
             " COUNT(*) FILTER (WHERE created_at >= ?),"
             " COUNT(*) FILTER (WHERE status IN ('pendiente','en_proceso') AND follow_up_date IS NOT NULL AND follow_up_date < ?)"
-            " FROM inventory_observations WHERE deleted_at IS NULL", (recent_since, self._today().isoformat())).fetchone()
+            " FROM inventory_observations WHERE deleted_at IS NULL AND product_id IN (SELECT id FROM products WHERE group_id IS ?)",
+            (recent_since, self._today().isoformat(), group_id)).fetchone()
         return {"total": r[0], "pendiente": r[1], "en_proceso": r[2], "resuelta": r[3], "cerrada": r[4], "criticas": r[5],
                 "recientes": r[6], "seguimiento_vencido": r[7]}
 
     def get(self, actor: Actor, observation_id: int) -> dict:
         actor.require("observaciones.ver")
         with self.db.read() as conn:
-            obs = self._observation(conn, observation_id, full=True)
+            obs = self._observation(conn, actor, observation_id, full=True)
             obs["product"] = self._product_context(conn, actor, obs["product_id"])
             obs["events"] = [_event(dict(r)) for r in conn.execute(
                 "SELECT e.*, u.full_name AS user_name FROM inventory_observation_events e LEFT JOIN users u ON u.id = e.user_id"
@@ -254,8 +262,10 @@ class ObservationService:
         actor.require("observaciones.crear")
         with self.db.tx() as conn:
             product_id = _int(data.get("product_id"), "product_id", "Seleccione el producto relacionado.")
-            if not conn.execute("SELECT 1 FROM products WHERE id = ?", (product_id,)).fetchone():
+            product = conn.execute("SELECT group_id FROM products WHERE id = ?", (product_id,)).fetchone()
+            if not product:
                 raise NotFoundError("Producto no encontrado.", {"product_id": "Seleccione un producto del inventario."})
+            self.scopes.check(conn, actor, product["group_id"])
             values = self._values(conn, actor, data, None)
             now = iso()
             status = "pendiente"
@@ -280,7 +290,7 @@ class ObservationService:
             raise ValidationError("El producto de una observación no se cambia.",
                                   {"product_id": "Registre una observación nueva para otro producto."})
         with self.db.tx() as conn:
-            current = self._observation(conn, observation_id)
+            current = self._observation(conn, actor, observation_id)
             _check_version(data, current)
             values = self._values(conn, actor, data, current)
             changes = {k: (current[k], v) for k, v in values.items() if current[k] != v}
@@ -349,7 +359,7 @@ class ObservationService:
         status = _choice(status, STATUSES, "status")
         comment = _clean(comment, 2000, "comment", "El comentario")
         with self.db.tx() as conn:
-            current = self._observation(conn, observation_id)
+            current = self._observation(conn, actor, observation_id)
             _check_version({"version": version}, current)
             if current["status"] == status:
                 raise ValidationError("La observación ya tiene ese estado.", {"status": "Elija un estado diferente."})
@@ -380,7 +390,7 @@ class ObservationService:
         if not text:
             raise ValidationError("Faltan datos.", {"comment": "Escriba el comentario."})
         with self.db.tx() as conn:
-            self._observation(conn, observation_id)
+            self._observation(conn, actor, observation_id)
             event_id = self._event(conn, actor, observation_id, "comentario", None, None, text)
             conn.execute("UPDATE inventory_observations SET updated_at = ?, updated_by = ? WHERE id = ?",
                          (iso(), actor.id, observation_id))
@@ -394,7 +404,7 @@ class ObservationService:
         if not reason:
             raise ValidationError("Escriba el motivo.", {"reason": "El motivo de la eliminación es obligatorio."})
         with self.db.tx() as conn:
-            current = self._observation(conn, observation_id)
+            current = self._observation(conn, actor, observation_id)
             now = iso()
             conn.execute("UPDATE inventory_observations SET deleted_at = ?, deleted_by = ?, delete_reason = ?, updated_at = ?,"
                          " updated_by = ?, version = version + 1 WHERE id = ?",
@@ -419,7 +429,7 @@ class ObservationService:
             raise ValidationError("Archivo demasiado grande.", {"file": f"Máximo {MAX_FILE_MB} MB."})
         _check_signature(suffix, content)
         with self.db.read() as conn:
-            self._observation(conn, observation_id)
+            self._observation(conn, actor, observation_id)
             count = conn.execute("SELECT COUNT(*) FROM inventory_observation_files WHERE observation_id = ?",
                                  (observation_id,)).fetchone()[0]
         if count >= MAX_FILES:
@@ -434,7 +444,7 @@ class ObservationService:
         digest = hashlib.sha256(content).hexdigest()
         try:
             with self.db.tx() as conn:
-                self._observation(conn, observation_id)
+                self._observation(conn, actor, observation_id)
                 file_id = conn.execute(
                     "INSERT INTO inventory_observation_files(observation_id, original_name, stored_name, content_type,"
                     " size_bytes, sha256, uploaded_by, uploaded_at) VALUES (?,?,?,?,?,?,?,?)",
@@ -450,7 +460,7 @@ class ObservationService:
     def file_for_download(self, actor: Actor, observation_id: int, file_id: int) -> tuple[Path, str, str]:
         actor.require("observaciones.ver")
         with self.db.read() as conn:
-            self._observation(conn, observation_id)
+            self._observation(conn, actor, observation_id)
             row = conn.execute("SELECT * FROM inventory_observation_files WHERE id = ? AND observation_id = ?",
                                (file_id, observation_id)).fetchone()
         if not row:
@@ -463,7 +473,7 @@ class ObservationService:
     def delete_file(self, actor: Actor, observation_id: int, file_id: int) -> None:
         actor.require("observaciones.editar")
         with self.db.tx() as conn:
-            self._observation(conn, observation_id)
+            self._observation(conn, actor, observation_id)
             row = conn.execute("SELECT * FROM inventory_observation_files WHERE id = ? AND observation_id = ?",
                                (file_id, observation_id)).fetchone()
             if not row:
@@ -486,8 +496,12 @@ class ObservationService:
         return path
 
     # ------------------------------------------------------------------ utilidades
-    @staticmethod
-    def _observation(conn: sqlite3.Connection, observation_id: int, full: bool = False) -> dict:
+    def _observation(self, conn: sqlite3.Connection, actor: Actor, observation_id: int, full: bool = False) -> dict:
+        """La observación, si su producto es de un inventario al que esta persona entra; si no, «no encontrada»."""
+        group = conn.execute("SELECT p.group_id FROM inventory_observations o JOIN products p ON p.id = o.product_id"
+                             " WHERE o.id = ?", (observation_id,)).fetchone()
+        if group is not None:
+            self.scopes.check(conn, actor, group[0], "Observación")
         if full:
             row = conn.execute(BASE_SQL.replace("SELECT o.id,", "SELECT o.notes, o.updated_by, o.id,") +
                                " WHERE o.id = ? AND o.deleted_at IS NULL", (observation_id,)).fetchone()

@@ -1,7 +1,7 @@
 import { Banknote, CheckCircle2, CreditCard, Printer, ShoppingCart, Trash2, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { ApiError, newKey, post } from '../../api/client';
+import { ApiError, getInventoryKey, newKey, post } from '../../api/client';
 import { Button } from '../../components/ui/Button';
 import { ConfirmDialog, Dialog } from '../../components/ui/Dialog';
 import { Alert, EmptyState, ErrorAlert } from '../../components/ui/Feedback';
@@ -15,11 +15,12 @@ import { addToCart, CartTable, CustomerPicker, ProductSearch, StockWarnings, Tot
 import { printReceipt } from './receipt';
 
 interface PaymentRow { method_id: number; amount: string; tendered: string; reference: string }
-const STORAGE = 'pospy.cart';
+// El carrito en curso se guarda por inventario: los productos de un grupo no se mezclan con los de otro.
+const cartStorage = () => `pospy.cart.${getInventoryKey() ?? 'general'}`;
 
 function loadCart(): { lines: CartLine[]; customer: Customer | null } {
   try {
-    return JSON.parse(sessionStorage.getItem(STORAGE) ?? '') ?? { lines: [], customer: null };
+    return JSON.parse(sessionStorage.getItem(cartStorage()) ?? '') ?? { lines: [], customer: null };
   } catch {
     return { lines: [], customer: null };
   }
@@ -53,7 +54,7 @@ export default function PosPage() {
   const hasCredit = payments.some((p) => methodById.get(p.method_id)?.kind === 'credito');
 
   useEffect(() => {
-    sessionStorage.setItem(STORAGE, JSON.stringify({ lines, customer }));
+    sessionStorage.setItem(cartStorage(), JSON.stringify({ lines, customer }));
     attemptKey.current = null;            // el carrito cambió: el próximo cobro es otra operación
   }, [lines, customer, payments]);
 
