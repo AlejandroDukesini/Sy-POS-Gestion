@@ -123,6 +123,10 @@ npm ci
 
 ### Ejecución
 
+Forma más simple: `iniciar.cmd` en la carpeta del proyecto. Usa siempre el entorno `backend\.venv` (y lo crea
+si no existe). Ejecutar `python -m pospy` con el Python global de Windows falla con
+`ModuleNotFoundError: No module named 'uvicorn'`, porque las dependencias están instaladas solo en `.venv`.
+
 Desarrollo con recarga en caliente (dos terminales):
 
 ```powershell

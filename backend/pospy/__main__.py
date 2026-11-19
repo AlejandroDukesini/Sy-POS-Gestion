@@ -70,7 +70,14 @@ def main(argv: list[str] | None = None) -> None:
     if args.desktop:
         os.environ["POS_DESKTOP"] = "1"
 
-    import uvicorn
+    try:
+        import uvicorn
+    except ModuleNotFoundError:
+        sys.stderr.write(
+            f"Faltan las dependencias de POS-PY en este Python ({sys.executable}).\n"
+            "Inicie con el entorno del proyecto:  iniciar.cmd  (en la carpeta del proyecto)\n"
+            "o bien:  cd backend; .venv\\Scripts\\python.exe -m pospy\n")
+        raise SystemExit(1) from None
 
     from .api.app import create_app
     from .config import Config
