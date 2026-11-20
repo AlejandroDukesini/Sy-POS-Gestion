@@ -266,7 +266,7 @@ class DocumentService:
              page_size: int = 50, inventory: str | None = None) -> dict:
         actor.require("documentos.ver")
         with self.db.read() as conn:
-            where, params = ["d.group_id IS ?"], [self.scopes.resolve(conn, actor, inventory)]
+            where, params = ["d.inventory_id IS ?"], [self.scopes.resolve(conn, actor, inventory)]
         if type_id:
             where.append("d.type_id = ?")
             params.append(type_id)
@@ -291,21 +291,21 @@ class DocumentService:
         actor.require("documentos.ver")
         with self.db.read() as conn:
             doc = self._detail(conn, doc_id)
-            self.scopes.check(conn, actor, doc["group_id"], "Documento")
+            self.scopes.check(conn, actor, doc["inventory_id"], "Documento")
             return doc
 
     def _inventory_of(self, conn: sqlite3.Connection, actor: Actor, lines, fallback: int | None) -> int | None:
         """Inventario del documento: el de sus productos (todos del mismo inventario y accesible)."""
         ids = [ln.product_id for ln in lines]
-        groups = {r[0] for r in conn.execute(f"SELECT DISTINCT group_id FROM products WHERE id IN ({','.join('?' * len(ids))})",
+        groups = {r[0] for r in conn.execute(f"SELECT DISTINCT inventory_id FROM products WHERE id IN ({','.join('?' * len(ids))})",
                                              ids)} if ids else set()
         if len(groups) > 1:
             raise ValidationError("Todos los productos del documento deben ser del mismo inventario.")
-        group_id = next(iter(groups)) if groups else fallback
-        if groups and group_id != fallback and fallback is not None:
+        inventory_id = next(iter(groups)) if groups else fallback
+        if groups and inventory_id != fallback and fallback is not None:
             raise ValidationError("Los productos no pertenecen al inventario de este documento.")
-        self.scopes.check(conn, actor, group_id, "Producto")
-        return group_id
+        self.scopes.check(conn, actor, inventory_id, "Producto")
+        return inventory_id
 
     def _detail(self, conn: sqlite3.Connection, doc_id: int) -> dict:
         row = conn.execute("SELECT d.*, t.name AS type_name, t.code AS type_code, u.username, u.full_name AS user_full_name"
@@ -364,7 +364,8 @@ class DocumentService:
             if not t or not t["active"]:
                 raise ValidationError("Seleccione un tipo de documento activo.", {"type_id": "Tipo no válido."})
             lines, totals = pricing.price_items(conn, actor, data.get("lines") or [], self.settings.get("ventas", conn))
-            group_id = self._inventory_of(conn, actor, lines, None) if lines else self.scopes.resolve(conn, actor, inventory)
+            inventory_id = self._inventory_of(conn, actor, lines, None) if lines else self.scopes.resolve(conn, actor, inventory)
+            self.scopes.require_active(conn, inventory_id)
             customer = self._customer_fields(conn, data)
             extra = self._extra_values(t, data)
             today = local_today(self._tz())
@@ -382,13 +383,13 @@ class DocumentService:
             doc_id = conn.execute(
                 "INSERT INTO commercial_documents(type_id, number, idempotency_key, customer_id, customer_name,"
                 " customer_identification, customer_phone, customer_email, customer_address, notes, extra, doc_date,"
-                " valid_until, gross_cents, discount_cents, tax_cents, total_cents, user_id, created_at, updated_at, group_id)"
+                " valid_until, gross_cents, discount_cents, tax_cents, total_cents, user_id, created_at, updated_at, inventory_id)"
                 " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (t["id"], number, idempotency_key, customer["customer_id"], customer["customer_name"],
                  customer["customer_identification"], customer["customer_phone"], customer["customer_email"],
                  customer["customer_address"], (data.get("notes") or "").strip()[:1000], json.dumps(extra, ensure_ascii=False),
                  str(today), valid_until, totals.gross_cents, totals.discount_cents, totals.tax_cents, totals.total_cents,
-                 actor.id, now, now, group_id)).lastrowid
+                 actor.id, now, now, inventory_id)).lastrowid
             self._insert_lines(conn, doc_id, lines)
             record(conn, actor, "documento.crear", "document", doc_id, {"tipo": t["name"], "numero": number,
                                                                         "total": totals.total_cents})
@@ -410,14 +411,14 @@ class DocumentService:
             doc = conn.execute("SELECT * FROM commercial_documents WHERE id = ?", (doc_id,)).fetchone()
             if not doc:
                 raise NotFoundError("Documento no encontrado.")
-            self.scopes.check(conn, actor, doc["group_id"], "Documento")
+            self.scopes.check(conn, actor, doc["inventory_id"], "Documento")
             if doc["status"] != "vigente":
                 raise ValidationError("Un documento anulado no se puede modificar.")
             if int(data.get("version") or 0) != doc["version"]:
                 raise ConflictError("Otra persona modificó este documento. Recargue y vuelva a intentarlo.")
             t = conn.execute("SELECT * FROM document_types WHERE id = ?", (doc["type_id"],)).fetchone()
             lines, totals = pricing.price_items(conn, actor, data.get("lines") or [], self.settings.get("ventas", conn))
-            if lines and self._inventory_of(conn, actor, lines, doc["group_id"]) != doc["group_id"]:
+            if lines and self._inventory_of(conn, actor, lines, doc["inventory_id"]) != doc["inventory_id"]:
                 raise ValidationError("Los productos no pertenecen al inventario de este documento.")
             customer = self._customer_fields(conn, data)
             extra = self._extra_values(t, data)
@@ -443,7 +444,7 @@ class DocumentService:
             doc = conn.execute("SELECT * FROM commercial_documents WHERE id = ?", (doc_id,)).fetchone()
             if not doc:
                 raise NotFoundError("Documento no encontrado.")
-            self.scopes.check(conn, actor, doc["group_id"], "Documento")
+            self.scopes.check(conn, actor, doc["inventory_id"], "Documento")
             if doc["status"] == "anulado":
                 raise ValidationError("El documento ya estaba anulado.")
             conn.execute("UPDATE commercial_documents SET status = 'anulado', updated_at = ?, version = version + 1 WHERE id = ?",

@@ -94,6 +94,7 @@ class AuthService:
                                                          hash_password(password), now, now))
             actor = Actor(cur.lastrowid, username, "admin", perms.ALL)
             self.access.write(conn, {"login_enabled": True, "setup_completed": True, "setup_step": "listo"}, actor.id)
+            _first_inventory(conn, actor.id)
             record(conn, actor, "instalacion.administrador_creado", "user", cur.lastrowid)
         self.discard_setup_code()
 
@@ -123,6 +124,7 @@ class AuthService:
                 record(conn, Actor(user["id"], "admin", "admin", perms.ALL), "instalacion.iniciada", "user", user["id"])
             elif user["password_hash"]:
                 raise AuthError("El administrador ya tiene contraseña: ingrese con ella para continuar la configuración.")
+            _first_inventory(conn, user["id"])
             token, actor = self._open(conn, user, client, open_mode=True)
             record(conn, actor, "instalacion.asistente_abierto", "user", user["id"])
         return LoginResult(token, actor, False)
@@ -297,3 +299,10 @@ def _clean_username(username: str) -> str:
     if not re.fullmatch(r"[a-z0-9._-]{3,40}", value):
         raise ValidationError("Usuario no válido.", {"username": "Use de 3 a 40 letras, números, punto, guion o guion bajo."})
     return value
+
+
+def _first_inventory(conn, admin_id: int) -> None:
+    """El primer administrador empieza con su inventario principal (sin productos: no se crean datos ficticios)."""
+    from .inventories import create_inventory_conn
+    if not conn.execute("SELECT 1 FROM inventories WHERE owner_id = ?", (admin_id,)).fetchone():
+        create_inventory_conn(conn, admin_id, "Inventario principal")

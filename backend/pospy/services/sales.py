@@ -6,7 +6,7 @@ cobro: un doble clic o un reintento de red devuelve la venta ya registrada en lu
 
 Inventario por grupo: todos los productos de una venta deben ser del mismo inventario y la persona
 debe poder entrar a él (integrante activo del grupo o, en el general, administrador / empleado sin
-grupo). La venta guarda ese inventario (sales.group_id) y solo la ven, anulan o devuelven quienes
+grupo). La venta guarda ese inventario (sales.inventory_id) y solo la ven, anulan o devuelven quienes
 entran a él. Dos ventas simultáneas de las últimas unidades no dejan existencias negativas: las
 escrituras se serializan (BEGIN IMMEDIATE + candado) y la existencia se comprueba dentro de la
 transacción.
@@ -61,18 +61,18 @@ class SalesService:
         if not product_ids:
             return self.inventory.scopes.resolve(conn, actor, None)
         marks = ",".join("?" * len(product_ids))
-        groups = {r[0] for r in conn.execute(f"SELECT DISTINCT group_id FROM products WHERE id IN ({marks})", product_ids)}
+        groups = {r[0] for r in conn.execute(f"SELECT DISTINCT inventory_id FROM products WHERE id IN ({marks})", product_ids)}
         if len(groups) > 1:
             raise ValidationError("Todos los productos de una venta deben ser del mismo inventario.")
-        group_id = next(iter(groups)) if groups else None
-        self.inventory.scopes.check(conn, actor, group_id)
-        return group_id
+        inventory_id = next(iter(groups)) if groups else None
+        self.inventory.scopes.check(conn, actor, inventory_id)
+        return inventory_id
 
     def _sale_row(self, conn: sqlite3.Connection, actor: Actor, sale_id: int):
         sale = conn.execute("SELECT * FROM sales WHERE id = ?", (sale_id,)).fetchone()
         if not sale:
             raise NotFoundError("Venta no encontrada.")
-        self.inventory.scopes.check(conn, actor, sale["group_id"], "Venta")
+        self.inventory.scopes.check(conn, actor, sale["inventory_id"], "Venta")
         return sale
 
     # ------------------------------------------------------------------ cotizar el carrito (sin guardar)
@@ -81,8 +81,9 @@ class SalesService:
             actor.require("ventas.vender")
         with self.db.read() as conn:
             lines, totals = pricing.price_items(conn, actor, items, self.settings.get("ventas", conn))
-            self._lines_inventory(conn, actor, [ln.product_id for ln in lines])
-            allow_negative = self.settings.get("inventario", conn)["allow_negative_stock"]
+            inventory_id = self._lines_inventory(conn, actor, [ln.product_id for ln in lines])
+            allow_negative = self.inventory.scopes.allow_negative(conn, inventory_id,
+                                                                  self.settings.get("inventario", conn)["allow_negative_stock"])
         needed: dict[int, int] = defaultdict(int)
         for ln in lines:
             needed[ln.product_id] += ln.qty_milli
@@ -125,7 +126,7 @@ class SalesService:
                 return {"duplicate": True, **self._detail(conn, existing[0])}
             ventas = self.settings.get("ventas", conn)
             lines, totals = pricing.price_items(conn, actor, data.get("lines") or [], ventas)
-            group_id = self._lines_inventory(conn, actor, [ln.product_id for ln in lines])
+            inventory_id = self._lines_inventory(conn, actor, [ln.product_id for ln in lines])
             customer = self._customer(conn, data.get("customer_id"))
             payments, credit, change = self._validate_payments(conn, data.get("payments") or [], totals.total_cents)
             if credit and not customer:
@@ -135,12 +136,12 @@ class SalesService:
             sale_id = conn.execute(
                 "INSERT INTO sales(number, idempotency_key, customer_id, customer_name, customer_identification, gross_cents,"
                 " discount_cents, total_cents, tax_cents, cost_cents, paid_cents, credit_cents, change_cents, notes, sale_date,"
-                " user_id, created_at, source_document_id, group_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " user_id, created_at, source_document_id, inventory_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (number, idempotency_key, customer["id"] if customer else None, customer["name"] if customer else "",
                  (customer["identification"] or "") if customer else "", totals.gross_cents, totals.discount_cents,
                  totals.total_cents, totals.tax_cents, totals.cost_cents, totals.total_cents - credit, credit, change,
                  (data.get("notes") or "").strip()[:500], str(today), actor.id, iso(),
-                 data.get("source_document_id") or None, group_id)).lastrowid
+                 data.get("source_document_id") or None, inventory_id)).lastrowid
             for ln in lines:
                 conn.execute(
                     "INSERT INTO sale_lines(sale_id, line_no, product_id, code, description, qty_milli, list_price_cents,"
@@ -164,7 +165,7 @@ class SalesService:
             record(conn, actor, "venta.registrar", "sale", sale_id,
                    {"numero": number, "total": totals.total_cents, "lineas": len(lines), "credito": credit})
             result = {"duplicate": False, **self._detail(conn, sale_id)}
-        self.inventory.scopes.notify(group_id, "venta", sale=sale_id, products=[ln.product_id for ln in lines])
+        self.inventory.scopes.notify(inventory_id, "venta", sale=sale_id, products=[ln.product_id for ln in lines])
         return result
 
     def _customer(self, conn: sqlite3.Connection, customer_id) -> sqlite3.Row | None:
@@ -234,7 +235,7 @@ class SalesService:
              page: int = 1, page_size: int = 50, inventory: str | None = None, user_id: int | None = None) -> dict:
         actor.require("ventas.historial")
         with self.db.read() as conn:
-            where, params = ["s.group_id IS ?"], [self.inventory.scopes.resolve(conn, actor, inventory)]
+            where, params = ["s.inventory_id IS ?"], [self.inventory.scopes.resolve(conn, actor, inventory)]
         if user_id:
             where.append("s.user_id = ?")
             params.append(user_id)
@@ -331,7 +332,7 @@ class SalesService:
             record(conn, actor, "venta.anular", "sale", sale_id, {"numero": sale["number"], "motivo": reason})
             result = self._detail(conn, sale_id)
             products = [ln["product_id"] for ln in result["lines"]]
-        self.inventory.scopes.notify(sale["group_id"], "anulacion", sale=sale_id, products=products)
+        self.inventory.scopes.notify(sale["inventory_id"], "anulacion", sale=sale_id, products=products)
         return result
 
     # ------------------------------------------------------------------ devoluciones
@@ -439,7 +440,7 @@ class SalesService:
                 "devolucion": number, "total": total, "motivo": reason, "reembolso": refund, "abono_cartera": credit_applied,
                 "estados": {c[0]["code"]: c[5] for c in computed}, "costo_reingresado": cost_back, "costo_perdido": cost_lost})
             result = {"duplicate": False, "return_id": return_id, **self._detail(conn, sale_id)}
-        self.inventory.scopes.notify(sale["group_id"], "devolucion", sale=sale_id, products=[c[0]["product_id"] for c in computed])
+        self.inventory.scopes.notify(sale["inventory_id"], "devolucion", sale=sale_id, products=[c[0]["product_id"] for c in computed])
         return result
 
     def resolve_return_line(self, actor: Actor, line_id: int, condition: str, note: str = "") -> dict:
@@ -475,7 +476,7 @@ class SalesService:
             record(conn, actor, "venta.devolucion_revisada", "sale", row["sale_id"],
                    {"devolucion": row["number"], "producto": row["code"], "estado": condition, "nota": note.strip()[:200]})
             result = self._detail(conn, row["sale_id"])
-        self.inventory.scopes.notify(sale["group_id"], "devolucion", sale=row["sale_id"], products=[row["product_id"]])
+        self.inventory.scopes.notify(sale["inventory_id"], "devolucion", sale=row["sale_id"], products=[row["product_id"]])
         return result
 
     # ------------------------------------------------------------------ resumen del día
@@ -486,16 +487,16 @@ class SalesService:
             g = self.inventory.scopes.resolve(conn, actor, inventory)
             totals = dict(conn.execute(
                 "SELECT COUNT(*) AS sales, COALESCE(SUM(total_cents), 0) AS total_cents, COALESCE(SUM(credit_cents), 0)"
-                " AS credit_cents FROM sales WHERE sale_date = ? AND status = 'completada' AND group_id IS ?", (target, g)).fetchone())
+                " AS credit_cents FROM sales WHERE sale_date = ? AND status = 'completada' AND inventory_id IS ?", (target, g)).fetchone())
             totals["by_method"] = [dict(r) for r in conn.execute(
                 "SELECT m.name, m.kind, COALESCE(SUM(sp.amount_cents), 0) AS amount_cents, COUNT(*) AS count"
                 " FROM sale_payments sp JOIN sales s ON s.id = sp.sale_id JOIN payment_methods m ON m.id = sp.method_id"
-                " WHERE s.sale_date = ? AND s.status = 'completada' AND s.group_id IS ? GROUP BY m.id ORDER BY m.sort_order",
+                " WHERE s.sale_date = ? AND s.status = 'completada' AND s.inventory_id IS ? GROUP BY m.id ORDER BY m.sort_order",
                 (target, g))]
             totals["returns_cents"] = conn.execute(
                 "SELECT COALESCE(SUM(r.total_cents), 0) FROM sale_returns r JOIN sales s ON s.id = r.sale_id"
-                " WHERE r.return_date = ? AND s.group_id IS ?", (target, g)).fetchone()[0]
-            totals["voided"] = conn.execute("SELECT COUNT(*) FROM sales WHERE sale_date = ? AND status = 'anulada' AND group_id IS ?",
+                " WHERE r.return_date = ? AND s.inventory_id IS ?", (target, g)).fetchone()[0]
+            totals["voided"] = conn.execute("SELECT COUNT(*) FROM sales WHERE sale_date = ? AND status = 'anulada' AND inventory_id IS ?",
                                             (target, g)).fetchone()[0]
         totals["date"] = target
         return totals

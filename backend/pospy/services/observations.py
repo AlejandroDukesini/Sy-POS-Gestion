@@ -99,13 +99,13 @@ class ObservationService:
         if not q:
             return []
         with self.db.read() as conn:
-            group_id = self.scopes.resolve(conn, actor, inventory)
+            inventory_id = self.scopes.resolve(conn, actor, inventory)
             rows = conn.execute(
                 "SELECT p.id, p.code, p.description, p.unit, p.active, p.external_ref FROM products p"
-                " WHERE p.group_id IS ? AND (p.code = ? COLLATE NOCASE OR p.code LIKE ? ESCAPE '\\' OR p.description LIKE ? ESCAPE '\\'"
+                " WHERE p.inventory_id IS ? AND (p.code = ? COLLATE NOCASE OR p.code LIKE ? ESCAPE '\\' OR p.description LIKE ? ESCAPE '\\'"
                 " OR COALESCE(p.external_ref, '') LIKE ? ESCAPE '\\')"
                 " ORDER BY (p.code = ? COLLATE NOCASE) DESC, p.active DESC, p.description COLLATE NOCASE LIMIT ?",
-                (group_id, q, like(q), like(q), like(q), q, min(30, max(1, int(limit))))).fetchall()
+                (inventory_id, q, like(q), like(q), like(q), q, min(30, max(1, int(limit))))).fetchall()
         return [dict(r) for r in rows]
 
     def product_context(self, actor: Actor, product_id: int) -> dict:
@@ -115,12 +115,12 @@ class ObservationService:
             return self._product_context(conn, actor, product_id)
 
     def _product_context(self, conn: sqlite3.Connection, actor: Actor, product_id: int) -> dict:
-        row = conn.execute("SELECT p.id, p.group_id, p.code, p.description, p.unit, p.active, p.external_ref, p.stock_milli,"
+        row = conn.execute("SELECT p.id, p.inventory_id, p.code, p.description, p.unit, p.active, p.external_ref, p.stock_milli,"
                            " p.min_stock_milli, p.cost_cents, c.name AS category_name FROM products p"
                            " LEFT JOIN categories c ON c.id = p.category_id WHERE p.id = ?", (product_id,)).fetchone()
         if not row:
             raise NotFoundError("Producto no encontrado.", {"product_id": "Seleccione un producto del inventario."})
-        self.scopes.check(conn, actor, row["group_id"])
+        self.scopes.check(conn, actor, row["inventory_id"])
         product = dict(row)
         if not (actor.can("inventario.costos")):
             product.pop("cost_cents")
@@ -161,8 +161,8 @@ class ObservationService:
              inventory: str | None = None) -> dict:
         actor.require("observaciones.ver")
         with self.db.read() as conn:
-            group_id = self.scopes.resolve(conn, actor, inventory)
-        where, params = ["o.deleted_at IS NULL", "p.group_id IS ?"], [group_id]
+            inventory_id = self.scopes.resolve(conn, actor, inventory)
+        where, params = ["o.deleted_at IS NULL", "p.inventory_id IS ?"], [inventory_id]
         q = str(filters.get("q") or "").strip()[:80]
         if q:
             explicit_id = re.fullmatch(r"(?i)(?:obs[-\s]?|#)0*(\d{1,9})", q)   # «OBS-00012» o «#12»: solo el id
@@ -222,21 +222,21 @@ class ObservationService:
         with self.db.read() as conn:
             result = paginate(conn, sql, params, sort="s", direction=direction, sortable={"s": column}, default_sort="s",
                               page=page, page_size=page_size, tiebreak="o.id")
-            result["metrics"] = self._metrics(conn, recent_since, group_id)
+            result["metrics"] = self._metrics(conn, recent_since, inventory_id)
         today = self._today().isoformat()
         for item in result["items"]:
             _flags(item, today)
         return result
 
-    def _metrics(self, conn: sqlite3.Connection, recent_since: str, group_id: int | None = None) -> dict:
+    def _metrics(self, conn: sqlite3.Connection, recent_since: str, inventory_id: int | None = None) -> dict:
         r = conn.execute(
             "SELECT COUNT(*), COUNT(*) FILTER (WHERE status = 'pendiente'), COUNT(*) FILTER (WHERE status = 'en_proceso'),"
             " COUNT(*) FILTER (WHERE status = 'resuelta'), COUNT(*) FILTER (WHERE status = 'cerrada'),"
             " COUNT(*) FILTER (WHERE priority = 'critica' AND status IN ('pendiente','en_proceso')),"
             " COUNT(*) FILTER (WHERE created_at >= ?),"
             " COUNT(*) FILTER (WHERE status IN ('pendiente','en_proceso') AND follow_up_date IS NOT NULL AND follow_up_date < ?)"
-            " FROM inventory_observations WHERE deleted_at IS NULL AND product_id IN (SELECT id FROM products WHERE group_id IS ?)",
-            (recent_since, self._today().isoformat(), group_id)).fetchone()
+            " FROM inventory_observations WHERE deleted_at IS NULL AND product_id IN (SELECT id FROM products WHERE inventory_id IS ?)",
+            (recent_since, self._today().isoformat(), inventory_id)).fetchone()
         return {"total": r[0], "pendiente": r[1], "en_proceso": r[2], "resuelta": r[3], "cerrada": r[4], "criticas": r[5],
                 "recientes": r[6], "seguimiento_vencido": r[7]}
 
@@ -262,10 +262,10 @@ class ObservationService:
         actor.require("observaciones.crear")
         with self.db.tx() as conn:
             product_id = _int(data.get("product_id"), "product_id", "Seleccione el producto relacionado.")
-            product = conn.execute("SELECT group_id FROM products WHERE id = ?", (product_id,)).fetchone()
+            product = conn.execute("SELECT inventory_id FROM products WHERE id = ?", (product_id,)).fetchone()
             if not product:
                 raise NotFoundError("Producto no encontrado.", {"product_id": "Seleccione un producto del inventario."})
-            self.scopes.check(conn, actor, product["group_id"])
+            self.scopes.check(conn, actor, product["inventory_id"])
             values = self._values(conn, actor, data, None)
             now = iso()
             status = "pendiente"
@@ -498,7 +498,7 @@ class ObservationService:
     # ------------------------------------------------------------------ utilidades
     def _observation(self, conn: sqlite3.Connection, actor: Actor, observation_id: int, full: bool = False) -> dict:
         """La observación, si su producto es de un inventario al que esta persona entra; si no, «no encontrada»."""
-        group = conn.execute("SELECT p.group_id FROM inventory_observations o JOIN products p ON p.id = o.product_id"
+        group = conn.execute("SELECT p.inventory_id FROM inventory_observations o JOIN products p ON p.id = o.product_id"
                              " WHERE o.id = ?", (observation_id,)).fetchone()
         if group is not None:
             self.scopes.check(conn, actor, group[0], "Observación")

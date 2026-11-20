@@ -74,7 +74,7 @@ class PrintTemplateService:
         row = conn.execute("SELECT * FROM print_templates WHERE public_id = ? AND deleted_at IS NULL", (public_id,)).fetchone()
         if not row:
             raise NotFoundError("Plantilla no encontrada.")
-        self.scopes.check(conn, actor, row["group_id"], "Plantilla")
+        self.scopes.check(conn, actor, row["inventory_id"], "Plantilla")
         return row
 
     def _version(self, conn, template_id: int, number: int) -> dict:
@@ -114,8 +114,8 @@ class PrintTemplateService:
         t = dict(row)
         t.pop("id")
         t.pop("original_file", None)
-        t["group"] = self.scopes.describe(conn, row["group_id"])
-        t.pop("group_id")
+        t["inventory"] = self.scopes.describe(conn, row["inventory_id"])
+        t.pop("inventory_id")
         t["document_type"] = None
         if row["document_type_id"]:
             dt = conn.execute("SELECT id, code, name FROM document_types WHERE id = ?", (row["document_type_id"],)).fetchone()
@@ -131,8 +131,8 @@ class PrintTemplateService:
         if not any(actor.can(p) for p in ("gestion.configuracion", "documentos.ver", "ventas.historial", "ventas.vender")):
             actor.require("gestion.configuracion")
         with self.db.read() as conn:
-            group_id = self.scopes.resolve(conn, actor, inventory)
-            where, params = ["deleted_at IS NULL", "group_id IS ?"], [group_id]
+            inventory_id = self.scopes.resolve(conn, actor, inventory)
+            where, params = ["deleted_at IS NULL", "inventory_id IS ?"], [inventory_id]
             if kind:
                 where.append("kind = ?")
                 params.append(kind)
@@ -260,12 +260,12 @@ class PrintTemplateService:
                 layout: dict, bindings: dict, note: str, public_id: str, original: tuple | None = None) -> dict:
         now = iso()
         with self.db.tx() as conn:
-            group_id = self.scopes.resolve(conn, actor, inventory)
+            inventory_id = self.scopes.resolve(conn, actor, inventory)
             tid = conn.execute(
-                "INSERT INTO print_templates(public_id, group_id, kind, document_type_id, name, source, active, original_file,"
+                "INSERT INTO print_templates(public_id, inventory_id, kind, document_type_id, name, source, active, original_file,"
                 " original_name, original_sha256, sheet, created_by, updated_by, created_at, updated_at)"
                 " VALUES (?,?,?,?,?,?,0,?,?,?,?,?,?,?,?)",
-                (public_id, group_id, kind, doc_type, name, source, *(original or (None, None, None, None)), actor.id, actor.id,
+                (public_id, inventory_id, kind, doc_type, name, source, *(original or (None, None, None, None)), actor.id, actor.id,
                  now, now)).lastrowid
             conn.execute("INSERT INTO print_template_versions(template_id, number, layout, bindings, note, created_by, created_at)"
                          " VALUES (?,?,?,?,?,?,?)", (tid, 1, json.dumps(layout, ensure_ascii=False),
@@ -356,8 +356,8 @@ class PrintTemplateService:
                 problems = engine.validate(v["layout"], v["bindings"])
                 if problems:
                     raise ValidationError("Antes de usarla como predeterminada corrija: " + problems[0])
-                conn.execute("UPDATE print_templates SET is_default = 0 WHERE group_id IS ? AND kind = ? AND document_type_id IS ?"
-                             " AND deleted_at IS NULL AND id <> ?", (row["group_id"], row["kind"], row["document_type_id"], row["id"]))
+                conn.execute("UPDATE print_templates SET is_default = 0 WHERE inventory_id IS ? AND kind = ? AND document_type_id IS ?"
+                             " AND deleted_at IS NULL AND id <> ?", (row["inventory_id"], row["kind"], row["document_type_id"], row["id"]))
             conn.execute("UPDATE print_templates SET name = ?, active = ?, is_default = ?, updated_by = ?, updated_at = ?,"
                          " version = version + 1 WHERE id = ?", (name, active, is_default, actor.id, iso(), row["id"]))
             record(conn, actor, "plantilla.actualizar", "print_template", row["id"],
@@ -369,7 +369,7 @@ class PrintTemplateService:
         with self.db.read() as conn:
             row = self._row(conn, actor, public_id)
             v = self._version(conn, row["id"], row["current_version"])
-            inv = self.scopes.describe(conn, row["group_id"])["key"]
+            inv = self.scopes.describe(conn, row["inventory_id"])["key"]
         new_id = secrets.token_urlsafe(12)
         src, dst = self._dir(public_id), self._dir(new_id)
         dst.mkdir(parents=True)
@@ -457,20 +457,20 @@ class PrintTemplateService:
         return pdf, {"pages": page_count(pdf), "notes": notes, "totals": {k: str(v) for k, v in totals.items()}}
 
     # ------------------------------------------------------------------ generación real
-    def _choose(self, conn, actor: Actor, group_id: int | None, kind: str, doc_type: int | None, public_id: str | None):
+    def _choose(self, conn, actor: Actor, inventory_id: int | None, kind: str, doc_type: int | None, public_id: str | None):
         if public_id:
             row = self._row(conn, actor, public_id)
-            if row["group_id"] != group_id or row["kind"] != kind or row["document_type_id"] != doc_type:
+            if row["inventory_id"] != inventory_id or row["kind"] != kind or row["document_type_id"] != doc_type:
                 raise ValidationError("Esa plantilla no corresponde a este tipo de documento o inventario.")
             if not row["active"]:
                 raise ValidationError("La plantilla está inactiva.")
             return row
-        return conn.execute("SELECT * FROM print_templates WHERE group_id IS ? AND kind = ? AND document_type_id IS ?"
-                            " AND is_default = 1 AND active = 1 AND deleted_at IS NULL", (group_id, kind, doc_type)).fetchone()
+        return conn.execute("SELECT * FROM print_templates WHERE inventory_id IS ? AND kind = ? AND document_type_id IS ?"
+                            " AND is_default = 1 AND active = 1 AND deleted_at IS NULL", (inventory_id, kind, doc_type)).fetchone()
 
-    def has_template(self, conn, group_id: int | None, kind: str, doc_type: int | None) -> bool:
-        return bool(conn.execute("SELECT 1 FROM print_templates WHERE group_id IS ? AND kind = ? AND document_type_id IS ?"
-                                 " AND active = 1 AND deleted_at IS NULL", (group_id, kind, doc_type)).fetchone())
+    def has_template(self, conn, inventory_id: int | None, kind: str, doc_type: int | None) -> bool:
+        return bool(conn.execute("SELECT 1 FROM print_templates WHERE inventory_id IS ? AND kind = ? AND document_type_id IS ?"
+                                 " AND active = 1 AND deleted_at IS NULL", (inventory_id, kind, doc_type)).fetchone())
 
     def _company(self) -> dict:
         c = self.settings.get("empresa")
@@ -493,8 +493,8 @@ class PrintTemplateService:
                                (doc_id,)).fetchone()
             if not doc:
                 raise NotFoundError("Documento no encontrado.")
-            self.scopes.check(conn, actor, doc["group_id"], "Documento")
-            row = self._choose(conn, actor, doc["group_id"], "documento", doc["type_id"], public_id)
+            self.scopes.check(conn, actor, doc["inventory_id"], "Documento")
+            row = self._choose(conn, actor, doc["inventory_id"], "documento", doc["type_id"], public_id)
             if not row:
                 if required:
                     raise ValidationError(f"El tipo «{doc['type_name']}» no tiene una plantilla de impresión predeterminada.")
@@ -521,10 +521,10 @@ class PrintTemplateService:
                                 " WHERE s.id = ?", (sale_id,)).fetchone()
             if not sale:
                 raise NotFoundError("Venta no encontrada.")
-            self.scopes.check(conn, actor, sale["group_id"], "Venta")
+            self.scopes.check(conn, actor, sale["inventory_id"], "Venta")
             if not actor.can("ventas.historial") and sale["user_id"] != actor.id:
                 actor.require("ventas.historial")
-            row = self._choose(conn, actor, sale["group_id"], kind, None, public_id)
+            row = self._choose(conn, actor, sale["inventory_id"], kind, None, public_id)
             if not row:
                 raise ValidationError(f"No hay una plantilla de {KINDS[kind].lower()} predeterminada para este inventario.")
             v = self._version(conn, row["id"], row["current_version"])
@@ -574,10 +574,10 @@ class PrintTemplateService:
             actor.require("ventas.historial")
         with self.db.read() as conn:
             table = "commercial_documents" if target_type == "documento" else "sales"
-            target = conn.execute(f"SELECT group_id FROM {table} WHERE id = ?", (target_id,)).fetchone()  # noqa: S608 - tabla fija
+            target = conn.execute(f"SELECT inventory_id FROM {table} WHERE id = ?", (target_id,)).fetchone()  # noqa: S608 - tabla fija
             if not target:
                 raise NotFoundError("Operación no encontrada.")
-            self.scopes.check(conn, actor, target["group_id"], "Operación")
+            self.scopes.check(conn, actor, target["inventory_id"], "Operación")
             return [dict(r) for r in conn.execute(
                 "SELECT o.id, o.pages, o.created_at, t.name AS template_name, v.number AS template_version, u.full_name AS user_name"
                 " FROM print_outputs o JOIN print_template_versions v ON v.id = o.template_version_id"

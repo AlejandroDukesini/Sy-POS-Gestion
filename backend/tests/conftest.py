@@ -83,3 +83,16 @@ def login(client, username="admin", password=ADMIN_PASSWORD):
     r = client.post("/api/auth/login", json={"username": username, "password": password})
     assert r.status_code == 200, r.text
     return r.json()
+
+
+def main_inventory(ctx, admin) -> str:
+    """Clave del inventario principal del administrador (lo crea la instalación)."""
+    cards = ctx.inventories.list(admin)
+    return next((c["key"] for c in cards if c["group"] is None), cards[0]["key"])
+
+
+def grant_inventory(ctx, admin, user_id: int, permissions=None, inventory: str | None = None) -> None:
+    """Da permisos en un inventario a un integrante (por defecto todos los de inventario)."""
+    from pospy.services.inventories import MEMBER_ASSIGNABLE
+    perms = sorted(MEMBER_ASSIGNABLE) if permissions is None else permissions
+    ctx.inventories.update(admin, inventory or main_inventory(ctx, admin), {"members": [{"user_id": user_id, "permissions": perms}]})

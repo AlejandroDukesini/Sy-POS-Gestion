@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from pospy.api.app import create_app
 from pospy.core.errors import NotFoundError, PermissionDenied, ValidationError
 
-from .conftest import EMPLOYEE_PASSWORD, key, login
+from .conftest import EMPLOYEE_PASSWORD, key, login, main_inventory
 from .test_groups import _employee, _token
 
 PASSWORD_2 = "Almacen firme 77y"
@@ -20,13 +20,14 @@ PASSWORD_3 = "Vitrina clara 55z"
 
 @pytest.fixture()
 def shop(ctx, admin, employee, cash_id):
-    """Grupo «Sucursal Armenia» con Ana (employee) y Beto; Caro trabaja en el inventario general.
-    El grupo tiene su propio producto TAL-01 con 5 unidades."""
+    """Inventario «Sucursal Armenia» del administrador, asociado al grupo del mismo nombre, con Ana (employee) y Beto.
+    Caro no está en ningún grupo: trabaja en el inventario principal (sin grupo). El inventario del grupo tiene TAL-01."""
     beto = _employee(ctx, admin, "beto", "Beto Bodega", PASSWORD_2)
     caro = _employee(ctx, admin, "caro", "Caro Caja", PASSWORD_3)
     g = ctx.groups.create(admin, {"name": "Sucursal Armenia"})
-    gid = g["group"]["public_id"]
-    token = _token(ctx.groups.create_invitation(admin, gid, {"max_uses": 5})["url"])
+    group = g["group"]["public_id"]
+    gid = ctx.inventories.create(admin, {"name": "Sucursal Armenia", "group": group})["key"]
+    token = _token(ctx.groups.create_invitation(admin, group, {"max_uses": 5})["url"])
     ctx.groups.accept(employee, token)
     ctx.groups.accept(beto, token)
     product = ctx.inventory.create(admin, {"code": "TAL-01", "description": "Taladro", "price": "10000", "cost": "6000",
@@ -68,7 +69,7 @@ def test_group_members_share_one_inventory_and_others_cannot_see_it(ctx, admin, 
         _sell(ctx, caro, p, 1, shop["cash"])
     # Un integrante del grupo no entra al inventario general
     with pytest.raises(NotFoundError):
-        ctx.inventory.list(ana, inventory="general")
+        ctx.inventory.list(ana, inventory=main_inventory(ctx, admin))
     # Otro administrador tampoco ve el grupo ajeno
     socio = ctx.users.create(admin, {"username": "socio", "full_name": "Socio", "role": "admin", "password": PASSWORD_3 + "x"})
     with ctx.db.tx() as conn:
@@ -235,12 +236,14 @@ def test_http_inventory_header_and_isolation(ctx, admin, shop):
     login(c, "caro", PASSWORD_3)
     gid, p = shop["gid"], shop["product"]
     keys = [x["key"] for x in adm.get("/api/inventories").json()]
-    assert keys == ["general", gid]
+    assert keys == [main_inventory(ctx, admin), gid]
     assert [x["key"] for x in a.get("/api/inventories").json()] == [gid]
     assert [x["code"] for x in adm.get("/api/products", headers={"X-Inventory": gid}).json()["items"]] == ["TAL-01"]
     assert adm.get("/api/products").json()["items"] == []
     assert a.get("/api/products").json()["items"][0]["code"] == "TAL-01"
-    assert c.get("/api/products", headers={"X-Inventory": gid}).status_code == 404
+    foreign = c.get("/api/products", headers={"X-Inventory": gid})
+    missing = c.get("/api/products", headers={"X-Inventory": "I-00000000"})
+    assert foreign.status_code == missing.status_code == 403            # ajeno e inexistente: misma respuesta, nada se filtra
     assert c.get(f"/api/products/{p['id']}").status_code == 404
     assert adm.get("/api/inventory/dashboard", headers={"X-Inventory": gid}).status_code == 200
     assert adm.get("/api/inventory/returns", headers={"X-Inventory": gid}).json()["items"] == []

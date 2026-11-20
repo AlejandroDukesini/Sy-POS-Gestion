@@ -16,6 +16,7 @@ from .services.documents import DocumentService
 from .services.finance import FinanceService
 from .services.financial_reports import FinancialReportService
 from .services.groups import GroupService
+from .services.inventories import InventoryAdminService
 from .services.inventory import InventoryService
 from .services.notes import NoteService
 from .services.observations import ObservationService
@@ -53,6 +54,7 @@ class AppContext:
         self.prefs = PrefsService(self.db)
         self.catalog = CatalogService(self.db)
         self.scopes = InventoryScopes(self.db, self.realtime)
+        self.inventories = InventoryAdminService(self.db, self.scopes)
         self.inventory = InventoryService(self.db, self.settings, self.scopes)
         self.observations = ObservationService(self.db, self.settings, config.data_dir, self.scopes)
         self.sales = SalesService(self.db, self.settings, self.inventory)

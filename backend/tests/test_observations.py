@@ -11,7 +11,7 @@ from pospy.api.app import create_app
 from pospy.config import Config
 from pospy.context import AppContext
 
-from .conftest import EMPLOYEE_PASSWORD, key, login
+from .conftest import EMPLOYEE_PASSWORD, grant_inventory, key, login
 
 TODAY = date.today()
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
@@ -266,6 +266,7 @@ def test_permissions(client, ctx, admin, employee, obs):
         assert r.status_code == 403, (path, r.text)
     assert client.get("/api/observations/flags", params={"ids": str(obs["product_id"])}).json() == {}
 
+    grant_inventory(ctx, admin, employee.id)       # en el inventario puede todo: manda el permiso del usuario
     ctx.users.update(admin, employee.id, {"permissions": ["inventario.ver", "observaciones.ver", "observaciones.comentar"]})
     login(client, "empleado", EMPLOYEE_PASSWORD)
     detail = client.get(f"/api/observations/{oid}").json()

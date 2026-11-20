@@ -238,7 +238,7 @@ class SyncService:
         table = tabular.read_table(content, filename, sheet, header_row)
         suggested = tabular.suggest_columns(table.headers)
         with self.db.read() as conn:
-            extra = self.inventory.columns.columns_conn(conn)
+            extra = self.inventory.columns.columns_conn(conn, self.inventory.scopes.resolve(conn, actor, None))
         # Columnas adicionales existentes cuyo nombre coincide con un encabezado del archivo.
         free = {norm_name(h): h for h in table.headers if h and h not in suggested.values()}
         suggested_custom = {str(c["id"]): free[norm_name(c["name"])] for c in extra if norm_name(c["name"]) in free}
@@ -263,9 +263,9 @@ class SyncService:
                 "adjust_stock": bool(options.get("adjust_stock", False))}
         if opts["adjust_stock"]:
             actor.require("inventario.movimientos")
-        opts["custom"] = self._custom_plan(actor, options.get("custom") or [])
-        with self.db.read() as conn:     # el archivo se importa al inventario elegido (general o del grupo)
-            opts["group_id"] = self.inventory.scopes.resolve(conn, actor, inventory)
+        with self.db.read() as conn:     # el archivo se importa al inventario elegido
+            opts["inventory_id"] = self.inventory.scopes.resolve(conn, actor, inventory)
+        opts["custom"] = self._custom_plan(actor, options.get("custom") or [], opts["inventory_id"])
         return self._preview(actor, None, SourceFile(Path(filename).name, content), opts, "archivo",
                              f"Archivo {Path(filename).name}")
 
@@ -285,6 +285,8 @@ class SyncService:
                 "columns": c["config"].get("columns") or {}, "create_missing": bool(c["create_missing"]),
                 "update_catalog": bool(c["update_catalog"]),
                 "adjust_stock": bool(c["is_master"]) and c["stock_policy"] == "ajustar"}
+        with self.db.read() as conn:     # inventario configurado en la conexión o, si no, el predeterminado
+            opts["inventory_id"] = c["config"].get("inventory_id") or self.inventory.scopes.resolve(conn, actor, None)
         return self._preview(actor, c, source, opts, trigger, c["name"])
 
     def _preview(self, actor: Actor, connection: dict | None, source: SourceFile, opts: dict, trigger: str,
@@ -294,12 +296,12 @@ class SyncService:
         plan = opts.get("custom") or []
         records = tabular.to_records(table, columns, {p["ref"]: (p["header"], p["name"]) for p in plan})
         with self.db.read() as conn:
-            defs = self._custom_defs(conn, plan)
+            defs = self._custom_defs(conn, plan, opts["inventory_id"])
             _coerce_custom(records, defs)
             diff = self._diff(conn, records, opts, defs)
             mapped = {p["column_id"] for p in plan if p.get("column_id")}
             warnings = [f"La columna obligatoria «{c['name']}» no está en el archivo: los productos nuevos tomarán el valor"
-                        f" predeterminado «{c['default_value']}»." for c in self.inventory.columns.columns_conn(conn)
+                        f" predeterminado «{c['default_value']}»." for c in self.inventory.columns.columns_conn(conn, opts["inventory_id"])
                         if c["required"] and c["id"] not in mapped]
         if tabular.duplicate_headers(table.headers):
             warnings.append("Encabezados repetidos en el archivo (no se pueden importar): "
@@ -315,13 +317,13 @@ class SyncService:
         (self.imports_dir / f"run-{run_id}{suffix}").write_bytes(source.content)
         return self.run(actor, run_id)
 
-    def _custom_plan(self, actor: Actor, items: list) -> list[dict]:
+    def _custom_plan(self, actor: Actor, items: list, inventory_id: int) -> list[dict]:
         """Valida las columnas adicionales elegidas para importar (existentes o nuevas). No crea nada todavía."""
         if not isinstance(items, list) or len(items) > 60:
             raise ValidationError("Lista de columnas adicionales no válida.")
         plan, seen_ids, new_names = [], set(), set()
         with self.db.read() as conn:
-            existing = {c["id"]: c for c in self.inventory.columns.columns_conn(conn)}
+            existing = {c["id"]: c for c in self.inventory.columns.columns_conn(conn, inventory_id)}
             for i, item in enumerate(items):
                 if not isinstance(item, dict):
                     raise ValidationError("Columna adicional no válida.")
@@ -330,7 +332,8 @@ class SyncService:
                     raise ValidationError("Elija la columna del archivo para cada columna adicional.", {"custom": "Falta el encabezado."})
                 if item.get("new"):
                     actor.require("inventario.columnas")
-                    definition = self.inventory.columns.validate_definition(conn, dict(item["new"]), taken=new_names)
+                    definition = self.inventory.columns.validate_definition(conn, dict(item["new"]), taken=new_names,
+                                                                            inventory_id=inventory_id)
                     new_names.add(norm_name(definition["name"]))
                     plan.append({"ref": f"n{i}", "new": definition, "header": header, "name": definition["name"]})
                 else:
@@ -347,8 +350,8 @@ class SyncService:
                                  "name": existing[column_id]["name"]})
         return plan
 
-    def _custom_defs(self, conn: sqlite3.Connection, plan: list[dict]) -> dict[str, dict]:
-        existing = {c["id"]: c for c in self.inventory.columns.columns_conn(conn)}
+    def _custom_defs(self, conn: sqlite3.Connection, plan: list[dict], inventory_id: int) -> dict[str, dict]:
+        existing = {c["id"]: c for c in self.inventory.columns.columns_conn(conn, inventory_id)}
         defs = {}
         for p in plan:
             if p.get("new"):
@@ -371,8 +374,8 @@ class SyncService:
                 continue
             v = rec.values
             product = conn.execute("SELECT p.*, c.name AS category FROM products p LEFT JOIN categories c"
-                                   " ON c.id = p.category_id WHERE p.code = ? AND p.group_id IS ?",
-                                   (rec.code, opts.get("group_id"))).fetchone()
+                                   " ON c.id = p.category_id WHERE p.code = ? AND p.inventory_id IS ?",
+                                   (rec.code, opts.get("inventory_id"))).fetchone()
             if v.get("unit") and v["unit"] not in UNITS:
                 invalid.append({"row": rec.row, "code": rec.code, "errors": [f"Unidad «{v['unit']}» no reconocida."]})
                 continue
@@ -437,7 +440,7 @@ class SyncService:
         if not (actor.can("gestion.integraciones") or actor.can("inventario.importar")):
             actor.require("inventario.importar")
         with self.db.read() as conn:
-            allowed = {o["group_id"] for o in self.inventory.scopes.accessible(conn, actor)}
+            allowed = {o["inventory_id"] for o in self.inventory.scopes.accessible(conn, actor)}
             rows = [dict(r) for r in conn.execute(
                 "SELECT r.*, u.username FROM sync_runs r LEFT JOIN users u ON u.id = r.user_id ORDER BY r.id DESC LIMIT ?",
                 (min(200, limit),))]
@@ -475,10 +478,10 @@ class SyncService:
             raise ValidationError("Esta vista previa ya fue aplicada o descartada. Genere otra.")
         summary = json.loads(run["summary"])
         opts = summary["options"]
-        group_id = opts.get("group_id")
+        inventory_id = opts.get("inventory_id")
         if actor is not SYSTEM:
             with self.db.read() as conn:
-                self.inventory.scopes.check(conn, actor, group_id, "Proceso de importación")
+                self.inventory.scopes.check(conn, actor, inventory_id, "Proceso de importación")
         if opts.get("create_missing") or opts.get("update_catalog"):
             if actor is not SYSTEM:
                 actor.require("inventario.editar")
@@ -501,7 +504,7 @@ class SyncService:
         table = tabular.read_table(content, summary["file"], summary["sheet"], summary["header_row"])
         records = tabular.to_records(table, summary["columns"], {p["ref"]: (p["header"], p["name"]) for p in plan})
         with self.db.read() as conn:
-            _coerce_custom(records, self._custom_defs(conn, plan))
+            _coerce_custom(records, self._custom_defs(conn, plan, inventory_id))
         counts = Counter(r.code.lower() for r in records if r.code)
         applied = {"created": 0, "updated": 0, "stock_adjusted": 0, "stock_reported": 0, "skipped": 0, "errors": [],
                    "columns_created": []}
@@ -511,7 +514,7 @@ class SyncService:
             ids = {}
             for p in plan:
                 if p.get("new"):
-                    ids[p["ref"]], _ = self.inventory.columns.create_conn(conn, actor, p["new"])
+                    ids[p["ref"]], _ = self.inventory.columns.create_conn(conn, actor, p["new"], inventory_id)
                     applied["columns_created"].append(p["name"])
                 else:
                     ids[p["ref"]] = p["column_id"]
@@ -540,14 +543,14 @@ class SyncService:
                              (iso(), "ok" if not applied["errors"] else "con_errores", msg, run["connection_id"]))
             record(conn, actor, "inventario.importacion_aplicada", "sync_run", run_id,
                    {"fuente": label, **{k: v for k, v in applied.items() if k != "errors"}, "errores": len(applied["errors"])})
-        self.inventory.scopes.notify(group_id, "importacion", run=run_id)
+        self.inventory.scopes.notify(inventory_id, "importacion", run=run_id)
         return self.run(actor, run_id)
 
     def _apply_record(self, conn: sqlite3.Connection, actor: Actor, rec: tabular.Record, opts: dict, label: str,
                       applied: dict) -> None:
         v = rec.values
-        group_id = opts.get("group_id")
-        product = conn.execute("SELECT * FROM products WHERE code = ? AND group_id IS ?", (rec.code, group_id)).fetchone()
+        inventory_id = opts.get("inventory_id")
+        product = conn.execute("SELECT * FROM products WHERE code = ? AND inventory_id IS ?", (rec.code, inventory_id)).fetchone()
         category_id = self._category(conn, v["category"]) if v.get("category") else None
         if product is None:
             if not opts["create_missing"]:
@@ -557,7 +560,7 @@ class SyncService:
                     "discount_price": v.get("discount_price"), "cost": v.get("cost", 0), "tax_rate": v.get("tax_rate", 0),
                     "min_stock": v.get("min_stock"), "unit": v.get("unit") or "und", "category_id": category_id,
                     "custom": rec.custom, "_import": True}
-            pid = self.inventory.create_conn(conn, actor, data, group_id)
+            pid = self.inventory.create_conn(conn, actor, data, inventory_id)
             stock = v.get("stock")
             if stock is not None and stock > 0:
                 p = conn.execute("SELECT * FROM products WHERE id = ?", (pid,)).fetchone()
@@ -640,7 +643,7 @@ class SyncService:
 def _run_group(run: dict) -> int | None:
     """Inventario de una importación (las de conexiones y las anteriores a los grupos: el general)."""
     try:
-        return (json.loads(run["summary"] or "{}").get("options") or {}).get("group_id")
+        return (json.loads(run["summary"] or "{}").get("options") or {}).get("inventory_id")
     except (TypeError, ValueError):
         return None
 

@@ -80,8 +80,7 @@ class Database:
                 self._migrate_without_fk(version, name, script)
             else:
                 with self.tx() as conn:
-                    for statement in split_sql(script):
-                        conn.execute(statement)
+                    _run_script(conn, script)
                     conn.execute("INSERT INTO schema_migrations(version, name) VALUES (?, ?)", (version, name))
             applied.append(version)
         return applied
@@ -94,8 +93,7 @@ class Database:
                 conn.execute("PRAGMA legacy_alter_table = ON")
                 conn.execute("BEGIN IMMEDIATE")
                 try:
-                    for statement in split_sql(script):
-                        conn.execute(statement)
+                    _run_script(conn, script)
                     broken = conn.execute("PRAGMA foreign_key_check").fetchall()
                     if broken:
                         raise RuntimeError(f"La migración {version} dejó referencias rotas: {[tuple(r) for r in broken[:5]]}")
@@ -113,6 +111,15 @@ class Database:
         with self.read() as conn:
             row = conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()
             return int(row[0] or 0)
+
+
+def _run_script(conn: sqlite3.Connection, script) -> None:
+    """Una migración es SQL o una función run(conn) (cuando necesita leer el esquema o los datos reales)."""
+    if callable(script):
+        script(conn)
+        return
+    for statement in split_sql(script):
+        conn.execute(statement)
 
 
 def split_sql(script: str) -> list[str]:

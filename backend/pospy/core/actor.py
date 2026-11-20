@@ -14,6 +14,7 @@ class Actor:
     role: str
     permissions: frozenset[str] = field(default_factory=frozenset)
     full_name: str = ""
+    inventory_id: int | None = None   # inventario de la petición (los permisos de inventario son los de ese inventario)
 
     @property
     def is_admin(self) -> bool:

@@ -93,14 +93,18 @@ def actor_any(request: Request, app: AppContext = Depends(ctx)) -> Actor:
     return actor
 
 
-def actor(request: Request, current: Actor = Depends(actor_any)) -> Actor:
+def actor(request: Request, current: Actor = Depends(actor_any), app: AppContext = Depends(ctx)) -> Actor:
+    """Actor de la petición con los permisos de inventario del inventario elegido (cabecera X-Inventory) o del
+    predeterminado. Así cada operación usa los permisos que la persona tiene en ESE inventario."""
     if request.state.must_change:
         raise PermissionDenied("Debe cambiar su contraseña temporal antes de continuar.", {"password": "cambio_obligatorio"})
-    return current
+    key = (request.headers.get("x-inventory") or "").strip()[:20] or None
+    with app.db.read() as conn:
+        return app.scopes.scope_actor(conn, current, key)
 
 
 def inventory_key(x_inventory: str | None = Header(default=None)) -> str | None:
-    """Inventario elegido en la interfaz («general» o id público del grupo). El servicio valida el acceso."""
+    """Inventario elegido en la interfaz (id público «I-…»). El servicio valida el acceso."""
     return (x_inventory or "").strip()[:20] or None
 
 

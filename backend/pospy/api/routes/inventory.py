@@ -44,13 +44,6 @@ def products_meta(inv: str | None = Depends(inventory_key), current: Actor = Dep
             "summary": out(app.inventory.summary(current, inv))}
 
 
-# ------------------------------------------------------------------ inventarios (general y de cada grupo)
-@router.get("/inventories")
-def inventories(current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
-    with app.db.read() as conn:
-        return [{k: v for k, v in o.items() if k != "group_id"} for o in app.scopes.accessible(conn, current)]
-
-
 @router.get("/inventory/dashboard")
 def dashboard(date_from: str = "", date_to: str = "", product_id: int | None = None, user_id: int | None = None,
               inv: str | None = Depends(inventory_key), current: Actor = Depends(actor), app: AppContext = Depends(ctx)):

@@ -62,6 +62,20 @@ DEFAULT_EMPLOYEE = frozenset({
 })
 
 
+# Permisos que se otorgan POR INVENTARIO: en cada inventario el administrador decide qué puede hacer cada
+# integrante. El permiso efectivo exige el permiso del usuario Y el del inventario (nunca da más que antes).
+INVENTORY_SCOPED = frozenset({
+    "inventario.ver", "inventario.costos", "inventario.editar", "inventario.movimientos", "inventario.importar",
+    "inventario.columnas", "observaciones.ver", "observaciones.crear", "observaciones.editar", "observaciones.estado",
+    "observaciones.comentar", "observaciones.eliminar", "ventas.vender", "ventas.descuento", "ventas.historial",
+    "ventas.anular", "documentos.ver", "documentos.crear", "documentos.anular", "documentos.imprimir",
+})
+DEFAULT_INVENTORY_MEMBER = frozenset({
+    "inventario.ver", "ventas.vender", "ventas.historial", "documentos.ver", "documentos.crear", "documentos.imprimir",
+    "observaciones.ver", "observaciones.crear", "observaciones.comentar",
+})
+
+
 def effective(role: str, assigned: set[str] | frozenset[str]) -> frozenset[str]:
     if role == "admin":
         return ALL

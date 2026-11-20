@@ -131,8 +131,12 @@ def typed(column: dict, value: str | None):
 
 
 class ColumnService:
-    def __init__(self, db):
+    def __init__(self, db, scopes=None):
         self.db = db
+        self.scopes = scopes   # inventario de la petición: cada inventario tiene sus propias columnas
+
+    def _inv(self, conn: sqlite3.Connection, actor: Actor) -> int:
+        return self.scopes.resolve(conn, actor, None)
 
     # ------------------------------------------------------------------ consulta
     def list(self, actor: Actor, include_archived: bool = False) -> dict:
@@ -140,7 +144,7 @@ class ColumnService:
         if include_archived:
             actor.require("inventario.columnas")
         with self.db.read() as conn:
-            columns = self.columns_conn(conn, include_archived)
+            columns = self.columns_conn(conn, self._inv(conn, actor), include_archived)
             if include_archived:
                 counts = dict(conn.execute("SELECT column_id, COUNT(*) FROM inventory_custom_values GROUP BY column_id").fetchall())
                 for c in columns:
@@ -149,18 +153,19 @@ class ColumnService:
                 "columns": columns, "types": TYPES}
 
     @staticmethod
-    def columns_conn(conn: sqlite3.Connection, include_archived: bool = False) -> list[dict]:
-        sql = "SELECT * FROM inventory_columns" + ("" if include_archived else " WHERE active = 1") + " ORDER BY active DESC, position, id"
+    def columns_conn(conn: sqlite3.Connection, inventory_id: int, include_archived: bool = False) -> list[dict]:
+        sql = ("SELECT * FROM inventory_columns WHERE inventory_id = ?" + ("" if include_archived else " AND active = 1")
+               + " ORDER BY active DESC, position, id")
         out = []
-        for r in conn.execute(sql):
+        for r in conn.execute(sql, (inventory_id,)):
             c = dict(r)
             c["options"] = json.loads(c["options"] or "[]")
             out.append(c)
         return out
 
-    def _get(self, conn: sqlite3.Connection, column_id: int) -> dict:
+    def _get(self, conn: sqlite3.Connection, column_id: int, inventory_id: int | None = None) -> dict:
         row = conn.execute("SELECT * FROM inventory_columns WHERE id = ?", (column_id,)).fetchone()
-        if not row:
+        if not row or (inventory_id is not None and row["inventory_id"] != inventory_id):
             raise NotFoundError("Columna no encontrada.")
         c = dict(row)
         c["options"] = json.loads(c["options"] or "[]")
@@ -168,7 +173,7 @@ class ColumnService:
 
     # ------------------------------------------------------------------ definición
     def validate_definition(self, conn: sqlite3.Connection, data: dict, current: dict | None = None,
-                            taken: set[str] = frozenset()) -> dict:
+                            taken: set[str] = frozenset(), inventory_id: int | None = None) -> dict:
         """Nombre, tipo, descripción, opciones, obligatoriedad y valor predeterminado ya validados."""
         errors: dict[str, str] = {}
         merged = {**(current or {}), **{k: v for k, v in data.items() if v is not None or k == "default_value"}}
@@ -182,8 +187,9 @@ class ColumnService:
         elif _norm(name) in taken:
             errors["name"] = f"El nombre «{name}» está repetido."
         else:
-            dup = conn.execute("SELECT name, active FROM inventory_columns WHERE name = ? COLLATE NOCASE AND id IS NOT ?",
-                               (name, current["id"] if current else None)).fetchone()
+            inv = current["inventory_id"] if current else inventory_id
+            dup = conn.execute("SELECT name, active FROM inventory_columns WHERE name = ? COLLATE NOCASE AND inventory_id = ?"
+                               " AND id IS NOT ?", (name, inv, current["id"] if current else None)).fetchone()
             if dup:
                 errors["name"] = (f"Ya existe la columna «{dup['name']}»." if dup["active"] else
                                   f"Ya existe la columna archivada «{dup['name']}»: restáurela en lugar de crear otra.")
@@ -228,22 +234,25 @@ class ColumnService:
     def create(self, actor: Actor, data: dict) -> dict:
         actor.require("inventario.columnas")
         with self.db.tx() as conn:
-            column_id, filled = self.create_conn(conn, actor, data)
+            column_id, filled = self.create_conn(conn, actor, data, self._inv(conn, actor))
             column = self._get(conn, column_id)
         column["filled"] = filled
         return column
 
-    def create_conn(self, conn: sqlite3.Connection, actor: Actor, data: dict) -> tuple[int, int]:
-        if conn.execute("SELECT COUNT(*) FROM inventory_columns WHERE active = 1").fetchone()[0] >= MAX_COLUMNS:
+    def create_conn(self, conn: sqlite3.Connection, actor: Actor, data: dict, inventory_id: int,
+                    system: bool = False) -> tuple[int, int]:
+        if conn.execute("SELECT COUNT(*) FROM inventory_columns WHERE active = 1 AND inventory_id = ?",
+                        (inventory_id,)).fetchone()[0] >= MAX_COLUMNS:
             raise ValidationError(f"El inventario admite hasta {MAX_COLUMNS} columnas adicionales activas.")
-        values = self.validate_definition(conn, data)
-        position = conn.execute("SELECT COALESCE(MAX(position), 0) + 10 FROM inventory_columns").fetchone()[0]
+        values = self.validate_definition(conn, data, inventory_id=inventory_id)
+        position = conn.execute("SELECT COALESCE(MAX(position), 0) + 10 FROM inventory_columns WHERE inventory_id = ?",
+                                (inventory_id,)).fetchone()[0]
         now = iso()
         column_id = conn.execute(
-            "INSERT INTO inventory_columns(name, data_type, description, required, default_value, options, position,"
-            " created_at, updated_at, created_by, updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (values["name"], values["data_type"], values["description"], values["required"], values["default_value"],
-             json.dumps(values["options"], ensure_ascii=False), position, now, now, actor.id, actor.id)).lastrowid
+            "INSERT INTO inventory_columns(inventory_id, name, data_type, description, required, default_value, options,"
+            " position, is_system, created_at, updated_at, created_by, updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (inventory_id, values["name"], values["data_type"], values["description"], values["required"], values["default_value"],
+             json.dumps(values["options"], ensure_ascii=False), position, int(system), now, now, actor.id, actor.id)).lastrowid
         filled = self._fill_default(conn, actor, column_id, values) if values["required"] else 0
         record(conn, actor, "inventario.columna_crear", "inventory_column", column_id,
                {"nombre": values["name"], "tipo": values["data_type"], "obligatoria": bool(values["required"]),
@@ -254,7 +263,7 @@ class ColumnService:
         """Edita la definición. Si afecta valores existentes, los convierte o rechaza el cambio."""
         actor.require("inventario.columnas")
         with self.db.tx() as conn:
-            current = self._get(conn, column_id)
+            current = self._get(conn, column_id, self._inv(conn, actor))
             if "version" in data and data["version"] is not None and int(data["version"]) != current["version"]:
                 raise ConflictError("Otra persona modificó esta columna. Recargue y vuelva a intentarlo.")
             if current["is_system"] and any(k in data and data[k] is not None and data[k] != current[k]
@@ -292,8 +301,9 @@ class ColumnService:
                             " ON p.id = v.product_id WHERE v.column_id = ? ORDER BY p.code", (current["id"],)).fetchall()
         missing = 0
         if values["required"] and current["active"]:
-            missing = conn.execute("SELECT COUNT(*) FROM products p WHERE NOT EXISTS (SELECT 1 FROM inventory_custom_values v"
-                                   " WHERE v.product_id = p.id AND v.column_id = ?)", (current["id"],)).fetchone()[0]
+            missing = conn.execute("SELECT COUNT(*) FROM products p WHERE p.inventory_id = ? AND NOT EXISTS (SELECT 1 FROM"
+                                   " inventory_custom_values v WHERE v.product_id = p.id AND v.column_id = ?)",
+                                   (current["inventory_id"], current["id"])).fetchone()[0]
         converted, invalid = [], []
         type_change = values["data_type"] != current["data_type"] or values["options"] != current["options"]
         if type_change:
@@ -313,23 +323,26 @@ class ColumnService:
 
     def _fill_default(self, conn: sqlite3.Connection, actor: Actor, column_id: int, values: dict) -> int:
         return conn.execute("INSERT INTO inventory_custom_values(product_id, column_id, value, updated_at, updated_by)"
-                            " SELECT p.id, ?, ?, ?, ? FROM products p WHERE NOT EXISTS (SELECT 1 FROM inventory_custom_values v"
+                            " SELECT p.id, ?, ?, ?, ? FROM products p WHERE p.inventory_id = (SELECT inventory_id FROM"
+                            " inventory_columns WHERE id = ?) AND NOT EXISTS (SELECT 1 FROM inventory_custom_values v"
                             " WHERE v.product_id = p.id AND v.column_id = ?)",
-                            (column_id, values["default_value"], iso(), actor.id, column_id)).rowcount
+                            (column_id, values["default_value"], iso(), actor.id, column_id, column_id)).rowcount
 
     def set_active(self, actor: Actor, column_id: int, active: bool) -> dict:
         actor.require("inventario.columnas")
         with self.db.tx() as conn:
-            column = self._get(conn, column_id)
+            column = self._get(conn, column_id, self._inv(conn, actor))
             if column["is_system"]:
                 raise ValidationError("Las columnas del sistema no se archivan.")
             if column["active"] == int(active):
                 return column
-            if active and conn.execute("SELECT COUNT(*) FROM inventory_columns WHERE active = 1").fetchone()[0] >= MAX_COLUMNS:
+            if active and conn.execute("SELECT COUNT(*) FROM inventory_columns WHERE active = 1 AND inventory_id = ?",
+                                       (column["inventory_id"],)).fetchone()[0] >= MAX_COLUMNS:
                 raise ValidationError(f"El inventario admite hasta {MAX_COLUMNS} columnas adicionales activas.")
             position = column["position"]
             if active:
-                position = conn.execute("SELECT COALESCE(MAX(position), 0) + 10 FROM inventory_columns WHERE active = 1").fetchone()[0]
+                position = conn.execute("SELECT COALESCE(MAX(position), 0) + 10 FROM inventory_columns WHERE active = 1"
+                                        " AND inventory_id = ?", (column["inventory_id"],)).fetchone()[0]
             conn.execute("UPDATE inventory_columns SET active = ?, position = ?, updated_at = ?, updated_by = ?,"
                          " version = version + 1 WHERE id = ?", (int(active), position, iso(), actor.id, column_id))
             if active and column["required"]:
@@ -341,7 +354,7 @@ class ColumnService:
     def delete(self, actor: Actor, column_id: int, dry_run: bool = False) -> dict:
         actor.require("inventario.columnas")
         with self.db.tx() as conn:
-            column = self._get(conn, column_id)
+            column = self._get(conn, column_id, self._inv(conn, actor))
             if column["is_system"]:
                 raise ValidationError("«{}» es una columna del sistema: no se puede eliminar.".format(column["name"]))
             count = conn.execute("SELECT COUNT(*) FROM inventory_custom_values WHERE column_id = ?", (column_id,)).fetchone()[0]
@@ -356,7 +369,8 @@ class ColumnService:
     def reorder(self, actor: Actor, ids: list[int]) -> dict:
         actor.require("inventario.columnas")
         with self.db.tx() as conn:
-            active = [r[0] for r in conn.execute("SELECT id FROM inventory_columns WHERE active = 1")]
+            active = [r[0] for r in conn.execute("SELECT id FROM inventory_columns WHERE active = 1 AND inventory_id = ?",
+                                                 (self._inv(conn, actor),))]
             if sorted(ids) != sorted(active) or len(set(ids)) != len(ids):
                 raise ConflictError("La lista de columnas cambió. Recargue y vuelva a ordenar.")
             for position, column_id in enumerate(ids, start=1):
@@ -385,7 +399,8 @@ class ColumnService:
         keep_existing_on_empty: un valor vacío NO borra el existente (importaciones incompletas).
         """
         custom = custom or {}
-        columns = {str(c["id"]): c for c in self.columns_conn(conn, include_archived=True)}
+        inventory_id = conn.execute("SELECT inventory_id FROM products WHERE id = ?", (product_id,)).fetchone()[0]
+        columns = {str(c["id"]): c for c in self.columns_conn(conn, inventory_id, include_archived=True)}
         errors: dict[str, str] = {}
         normalized: dict[str, str | None] = {}
         for key, raw in custom.items():

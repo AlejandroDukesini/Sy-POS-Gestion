@@ -22,7 +22,7 @@ from pospy.documents.layout import compile_expr, format_value, parse_cell
 from pospy.documents.layout_pdf import page_count, render_pdf
 from pospy.documents.xlsx_import import import_sheet, inspect, suggest_bindings
 
-from .conftest import key
+from .conftest import key, main_inventory
 from .test_groups import _employee, _token
 
 DOCS = Path(__file__).resolve().parents[2] / "docs"
@@ -280,12 +280,13 @@ def test_permissions_and_group_isolation(ctx, admin, employee, types, product):
     with pytest.raises(PermissionDenied):
         ctx.print_templates.create_blank(employee, {"name": "x", "kind": "venta"})
     g = ctx.groups.create(admin, {"name": "Sucursal Armenia"})
-    gid = g["group"]["public_id"]
+    group = g["group"]["public_id"]
+    gid = ctx.inventories.create(admin, {"name": "Sucursal Armenia", "group": group})["key"]
     caro = _employee(ctx, admin, "caro", "Caro Caja", "Vitrina clara 55z")
-    ctx.groups.accept(employee, _token(ctx.groups.create_invitation(admin, gid, {"max_uses": 5})["url"]))
+    ctx.groups.accept(employee, _token(ctx.groups.create_invitation(admin, group, {"max_uses": 5})["url"]))
     t = _import(ctx, admin, synthetic_xlsx(), "Del grupo", types["cotizacion"], gid)
     assert ctx.print_templates.list(admin, gid)[0]["public_id"] == t["public_id"]
-    assert ctx.print_templates.list(admin, "general") == []
+    assert ctx.print_templates.list(admin, main_inventory(ctx, admin)) == []
     with pytest.raises(NotFoundError):
         ctx.print_templates.list(caro, gid)
     with pytest.raises(NotFoundError):
