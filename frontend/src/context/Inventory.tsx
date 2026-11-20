@@ -8,7 +8,8 @@
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, setInventoryKey } from '../api/client';
-import { Loading } from '../components/ui/Feedback';
+import { Link } from 'react-router-dom';
+import { EmptyState, Loading } from '../components/ui/Feedback';
 import { useRealtimeEvents } from '../lib/realtime';
 import { AuthContext, useAuth } from './Auth';
 
@@ -53,7 +54,7 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
   const load = useCallback(() => {
     // Sin cabecera de inventario: la lista no depende del inventario elegido (una elección vieja no la bloquea).
     api<InventoryOption[]>('/inventories', { skipInventory: true })
-      .then((list) => setOptions(list))
+      .then((list) => setOptions(Array.isArray(list) ? list.map(normalizeOption) : []))
       .catch(() => setOptions((old) => old ?? []));   // sin conexión: se sigue con la última elección
   }, []);
   useEffect(load, [load, userId]);
@@ -80,10 +81,14 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
   }, [userId]);
 
   const value = useMemo(() => ({ options: options ?? [], current, chosen, select, reload: load }), [options, current, chosen, select, load]);
-  // Permisos en pantalla = los del servidor: un permiso de inventario exige el del usuario Y el del inventario activo.
+  // Permisos en pantalla = los del servidor: en el inventario activo valen los permisos que el servidor calculó para
+  // ese inventario (usuario Y restricción del inventario, si la hay). Sin inventario activo, o si el servidor no
+  // informa permisos de inventario (servidor desactualizado), se usan los permisos del usuario: nunca se bloquea a
+  // nadie por un estado incompleto; el servidor sigue validando cada operación.
   const scopedAuth = useMemo(() => {
-    const allowed = new Set(current?.permissions ?? []);
-    const can = (...perms: string[]) => perms.every((p) => (p in PERMISSION_LABELS ? allowed.has(p) : auth.can(p)));
+    const known = Array.isArray(current?.permissions);
+    const allowed = new Set(known ? current!.permissions : []);
+    const can = (...perms: string[]) => perms.every((p) => (known && p in PERMISSION_LABELS ? allowed.has(p) : auth.can(p)));
     const canAny = (...perms: string[]) => perms.some((p) => can(p));
     return { ...auth, can, canAny };
   }, [auth, current]);
@@ -93,6 +98,16 @@ export function InventoryProvider({ children }: { children: ReactNode }) {
       <InventoryContext.Provider value={value}>{children}</InventoryContext.Provider>
     </AuthContext.Provider>
   );
+}
+
+/** Completa lo que falte (p. ej. respuesta de un servidor anterior). permissions queda sin definir si el servidor
+ *  no los informa: entonces la pantalla usa los permisos del usuario y el servidor decide en cada operación. */
+function normalizeOption(o: Partial<InventoryOption> & { key: string; name: string }): InventoryOption {
+  return {
+    description: '', status: 'activo', group: null, owner: false, products: 0, stock: '0', low_stock: 0, last_update: null,
+    first_products: [], ...o,
+    permissions: Array.isArray(o.permissions) ? o.permissions : (undefined as unknown as string[]),
+  } as InventoryOption;
 }
 
 export function useInventory(): InventoryState {
@@ -110,3 +125,16 @@ export const PERMISSION_LABELS: Record<string, string> = {
   'documentos.crear': 'Crear cotizaciones y órdenes', 'documentos.anular': 'Anular cotizaciones y órdenes',
   'documentos.imprimir': 'Imprimir documentos',
 };
+
+/** Mensaje claro cuando la persona aún no tiene un inventario donde trabajar (en lugar de un bloqueo). */
+export function NoInventoryNotice() {
+  const { user } = useAuth();
+  return (
+    <EmptyState title="No tiene un inventario asignado">
+      <p>{user?.role === 'admin'
+        ? 'Cree un inventario o asócielo a un grupo en Gestión › Administrar inventarios.'
+        : 'Pida al administrador que cree el inventario de su grupo o que lo autorice en uno.'}</p>
+      {user?.role === 'admin' && <Link className="btn btn-primary" to="/gestion/inventarios">Administrar inventarios</Link>}
+    </EmptyState>
+  );
+}

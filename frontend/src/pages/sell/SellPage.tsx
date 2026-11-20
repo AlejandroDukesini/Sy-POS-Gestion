@@ -3,6 +3,7 @@ import { lazy } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { LinkTabs } from '../../components/ui/Layout';
 import { useAuth } from '../../context/Auth';
+import { NoInventoryNotice, useInventory } from '../../context/Inventory';
 import { SaleDetail, SalesHistory } from './SalesHistory';
 
 const PosPage = lazy(() => import('./PosPage'));
@@ -10,6 +11,8 @@ const DocumentsPage = lazy(() => import('./DocumentsPage'));
 
 export default function SellPage() {
   const { can } = useAuth();
+  const { current } = useInventory();
+  if (!current) return <NoInventoryNotice />;
   const tabs = [
     ...(can('ventas.vender') ? [{ to: '/vender', label: 'Punto de venta', end: true, icon: <ShoppingCart size={20} aria-hidden /> }] : []),
     ...(can('documentos.ver') ? [{ to: '/vender/documentos', label: 'Cotizaciones y órdenes', icon: <FileText size={20} aria-hidden /> }] : []),

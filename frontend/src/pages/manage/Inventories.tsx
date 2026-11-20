@@ -88,11 +88,16 @@ function SettingsFields({ settings, setSettings, perms }: { settings: any; setSe
       <Checkbox label="Autorizar automáticamente a los integrantes del grupo con los permisos iniciales"
         hint="Si lo desactiva, cada integrante necesita que usted lo autorice." checked={settings.auto_authorize}
         onChange={(v) => setSettings({ ...settings, auto_authorize: v })} />
-      <details>
-        <summary>Permisos iniciales de los integrantes ({settings.member_permissions.length})</summary>
+      <SelectField label="Qué pueden hacer los integrantes en este inventario"
+        value={settings.member_permissions === null ? 'usuario' : 'restringir'}
+        onChange={(v) => setSettings({ ...settings, member_permissions: v === 'usuario' ? null : DEFAULT_MEMBER })}
+        hint="Por defecto cada integrante conserva los permisos de su usuario (Gestión › Usuarios). Puede restringirlos aquí."
+        options={[{ value: 'usuario', label: 'Lo que permite su usuario (sin restricción)' },
+          { value: 'restringir', label: 'Restringir a los permisos elegidos' }]} />
+      {settings.member_permissions !== null && (
         <PermissionChecklist idPrefix="default" perms={perms} value={settings.member_permissions}
           onChange={(v) => setSettings({ ...settings, member_permissions: v })} />
-      </details>
+      )}
       <SelectField label="Ventas sin existencias suficientes" value={settings.allow_negative_stock === null ? 'global' : settings.allow_negative_stock ? 'si' : 'no'}
         onChange={(v) => setSettings({ ...settings, allow_negative_stock: v === 'global' ? null : v === 'si' })}
         options={[{ value: 'global', label: 'Usar la configuración general' }, { value: 'no', label: 'No permitir existencias negativas' },
@@ -110,7 +115,7 @@ function InventoryCreate() {
   const groups = useApi<GroupOpt[]>('/inventories/groups');
   const perms = useApi<Perm[]>('/inventories/permissions');
   const [form, setForm] = useState({ name: '', description: '', group: '' });
-  const [settings, setSettings] = useState<any>({ auto_authorize: true, member_permissions: DEFAULT_MEMBER, allow_negative_stock: null, low_stock_alerts: true });
+  const [settings, setSettings] = useState<any>({ auto_authorize: true, member_permissions: null, allow_negative_stock: null, low_stock_alerts: true });
   const [authorized, setAuthorized] = useState<Record<number, boolean>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<ApiError | null>(null);
@@ -128,7 +133,7 @@ function InventoryCreate() {
     setError(null);
     try {
       const members = (group?.members ?? []).map((m) => ({ user_id: m.id,
-        permissions: authorized[m.id] ? settings.member_permissions : [] }));
+        permissions: authorized[m.id] ? null : [] }));      // autorizado: según la configuración; no: sin acceso
       const inv = await post('/inventories', { ...form, name: form.name.trim(), settings, members });
       notify('success', 'Inventario creado', `${inv.name} · grupo ${inv.group?.name}`);
       reload();
@@ -296,7 +301,8 @@ function InventoryDetail() {
             <ul className="result-list">
               {d.members.map((m: any) => {
                 const value = members[m.id] !== undefined ? members[m.id] : m.custom ? m.permissions : null;
-                const effective = value ?? (settings.auto_authorize ? settings.member_permissions : []);
+                // Sin cambios locales se muestra lo que calculó el servidor (permisos de usuario Y restricción del inventario).
+                const effective: string[] = value ?? (members[m.id] === null ? m.effective : m.custom ? m.permissions : m.effective) ?? [];
                 return (
                   <li key={m.id} className="result-item" style={{ display: 'block', cursor: 'default' }}>
                     <div className="row" style={{ justifyContent: 'space-between' }}>

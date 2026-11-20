@@ -7,7 +7,9 @@ import { AuthProvider } from '../context/Auth';
 import { InventoryProvider, useInventory } from '../context/Inventory';
 import { ToastProvider } from '../context/Toast';
 import { useAuth } from '../context/Auth';
+import { AppShell } from '../components/layout/AppShell';
 import InventoryPage from '../pages/inventory/InventoryPage';
+import SellPage from '../pages/sell/SellPage';
 
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -24,12 +26,13 @@ const inv = (key: string, name: string, group: string | null, extra: Record<stri
   ...extra,
 });
 
-function mockApi(user: unknown, inventories: unknown[]) {
+function mockApi(user: unknown, inventories: unknown[], schema = 13) {
   const seen: { url: string; headers: Record<string, string> }[] = [];
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = String(input);
     seen.push({ url, headers: (init?.headers ?? {}) as Record<string, string> });
     if (url.endsWith('/api/me')) return json(200, user);
+    if (url.endsWith('/api/health')) return json(200, { status: 'ok', version: 'x', schema });
     if (/\/api\/inventories$/.test(url)) return json(200, inventories);
     if (url.includes('/api/products/meta')) return json(200, { units: ['und'], summary: { products: 0, low_stock: 0, out_of_stock: 0 } });
     if (url.includes('/api/products')) return json(200, { items: [], page: 1, pages: 1, total: 0 });
@@ -104,11 +107,40 @@ describe('inventarios según la cantidad', () => {
     expect(screen.getByText(/Lo que puede hacer en este inventario \(2\)/)).toBeInTheDocument();
   });
 
-  it('sin inventarios el empleado ve qué hacer', async () => {
-    mockApi(me('employee', ['inventario.ver']), []);
+  it('sin inventarios el empleado ve qué hacer (y conserva sus permisos de usuario en pantalla)', async () => {
+    mockApi(me('employee', ['inventario.ver', 'ventas.vender']), []);
     renderAt();
     expect(await screen.findByText('No tiene inventarios asignados')).toBeInTheDocument();
     expect(screen.getByText(/Pida al administrador que lo autorice/)).toBeInTheDocument();
-    expect(screen.getByLabelText('estado')).toHaveTextContent('ninguno|editar:false|vender:false');
+    expect(screen.getByLabelText('estado')).toHaveTextContent('ninguno|editar:false|vender:true');
+  });
+
+  it('Vender sin inventario muestra un mensaje claro, no un bloqueo', async () => {
+    mockApi(me('employee', ['ventas.vender']), []);
+    render(
+      <MemoryRouter initialEntries={['/vender']}>
+        <ToastProvider><AuthProvider><InventoryProvider>
+          <Routes><Route path="/vender/*" element={<SellPage />} /></Routes>
+        </InventoryProvider></AuthProvider></ToastProvider>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText('No tiene un inventario asignado')).toBeInTheDocument();
+    expect(screen.getByText(/Pida al administrador que cree el inventario de su grupo/)).toBeInTheDocument();
+  });
+
+  it('con un servidor desactualizado el administrador no queda bloqueado y se avisa que debe reiniciarlo', async () => {
+    // Servidor anterior: lista de inventarios sin el campo «permissions».
+    mockApi(me('admin', ['inventario.ver', 'inventario.editar', 'ventas.vender']),
+      [{ key: 'general', name: 'Inventario general', kind: 'general', status: 'activo' }], 12);
+    render(
+      <MemoryRouter initialEntries={['/inventario']}>
+        <ToastProvider><AuthProvider>
+          <Routes><Route element={<AppShell />}><Route path="/inventario/*" element={<InventoryPage />} /></Route></Routes>
+        </AuthProvider></ToastProvider>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole('heading', { name: 'Inventario · Inventario general' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Nuevo producto' })).toBeInTheDocument();
+    expect(await screen.findByText(/El servidor está ejecutando una versión anterior del programa/)).toBeInTheDocument();
   });
 });

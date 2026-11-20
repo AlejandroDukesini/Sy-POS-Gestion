@@ -37,9 +37,8 @@ SCOPED = ["inventario.ver", "inventario.costos", "inventario.editar", "inventari
           "inventario.columnas", "observaciones.ver", "observaciones.crear", "observaciones.editar", "observaciones.estado",
           "observaciones.comentar", "observaciones.eliminar", "ventas.vender", "ventas.descuento", "ventas.historial",
           "ventas.anular", "documentos.ver", "documentos.crear", "documentos.anular", "documentos.imprimir"]
-DEFAULT_MEMBER = ["inventario.ver", "ventas.vender", "ventas.historial", "documentos.ver", "documentos.crear",
-                  "documentos.imprimir", "observaciones.ver", "observaciones.crear", "observaciones.comentar"]
-DEFAULT_SETTINGS = {"auto_authorize": True, "member_permissions": DEFAULT_MEMBER, "allow_negative_stock": None,
+# member_permissions None: sin restricción, cada integrante conserva sus permisos de usuario.
+DEFAULT_SETTINGS = {"auto_authorize": True, "member_permissions": None, "allow_negative_stock": None,
                     "low_stock_alerts": True}
 OLD_REF = "group_id INTEGER REFERENCES work_groups(id)"
 NEW_REF = "inventory_id INTEGER NOT NULL REFERENCES inventories(id)"

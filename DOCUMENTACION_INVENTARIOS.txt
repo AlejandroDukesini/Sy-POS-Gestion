@@ -227,3 +227,59 @@ el mismo que se probó con túnel en el módulo de grupos). Pruebas manuales: ni
 Pruebas automáticas:
 - cd backend && .venv\Scripts\python -m pytest -q
 - cd frontend && npm test && npm run build && node e2e/inventories.mjs
+
+
+11. CORRECCIÓN DE REGRESIÓN (20-11-2026): ADMINISTRADOR BLOQUEADO Y EMPLEADO SIN POS
+------------------------------------------------------------------------------------------
+Causa raíz A (administrador: «No tiene permiso para esta sección»):
+- El servidor en uso llevaba encendido desde ANTES de la actualización. Seguía con el código
+  anterior y la base seguía en el esquema 12: la migración 13 se aplica al arrancar.
+- Mientras tanto se reconstruyó la interfaz (frontend/dist), que ese mismo servidor entrega.
+- La interfaz nueva recibió del servidor viejo la lista de inventarios SIN permisos, y negaba en
+  silencio todos los permisos de inventario.
+Causa raíz B (empleado sin ventas), defectos reales del modelo nuevo:
+- El empleado es integrante de un grupo SIN inventario propio. La regla exigía estar sin grupo para
+  entrar al inventario sin grupo, así que quedaba sin ningún inventario y sin POS.
+- Se confundía ACCESO con PERMISOS: sin restricción explícita, el inventario aplicaba unos
+  «permisos iniciales» reducidos y le quitaba funciones que su usuario sí tenía (editar,
+  movimientos, costos, descuentos).
+Correcciones:
+- Backend (services/scopes.py e inventories.py; migración v013 sin aplicar todavía en el negocio):
+  - La pertenencia al grupo da ACCESO.
+  - Lo que el empleado puede hacer sale de sus permisos de usuario, salvo que el administrador lo
+    RESTRINJA en ese inventario (member_permissions = None significa «sin restricción»).
+  - Un empleado que no tiene un grupo con inventario trabaja en el inventario sin grupo de la
+    empresa.
+  - La lista de inventarios calcula los permisos con los del usuario, no con los recortados por la
+    petición.
+  - El permiso efectivo que se muestra es el real.
+- Frontend:
+  - Los datos se normalizan (una respuesta incompleta ya no rompe la página).
+  - Sin inventario activo, o si el servidor no informa permisos, se usan los del usuario; el
+    servidor sigue validando cada operación.
+  - Vender sin inventario muestra un mensaje claro.
+  - Aviso «El servidor está ejecutando una versión anterior… reinícielo» cuando el esquema del
+    servidor es menor que el que requiere la interfaz.
+  - Administrar inventarios ofrece «Lo que permite su usuario (sin restricción)» o «Restringir».
+- No se quitaron controles de seguridad:
+  - otro administrador sigue sin acceso;
+  - un empleado de otro grupo sigue sin acceso;
+  - manipular identificadores sigue respondiendo 403 o 404;
+  - un usuario sin permiso de venta sigue sin poder vender.
+Pruebas:
+- tests/test_upgrade_regression.py: base en el esquema 12 igual a la del negocio, arranque que
+  migra, administrador y empleado por HTTP. Cubre: productos, movimientos, crear y cambiar
+  inventario, otro administrador bloqueado; venta del empleado, existencias, venta vista por el
+  administrador, permisos conservados tras volver a iniciar sesión, usuario sin permiso de venta, y
+  el paso al inventario de su grupo cuando se crea.
+- frontend/e2e/upgrade-regression.mjs, con navegador real y sesiones separadas: todo correcto.
+  - El administrador entra al inventario general, ve productos y movimientos, crea un inventario y
+    cambia de uno a otro.
+  - El empleado, en el punto de venta: busca, agrega al carrito, el total es $ 56.000, cobra, la
+    existencia baja de 10 a 8, el administrador ve la venta, y tras cerrar e iniciar sesión mantiene
+    el punto de venta.
+- vitest: 90 pasan (+2: servidor desactualizado sin bloqueo con aviso; Vender sin inventario).
+- Regresión E2E: inventories (adaptada: ahora prueba la RESTRICCIÓN en vivo), group-inventory,
+  print-templates, smoke, groups, notes-tasks y columns-group-tasks pasan.
+ACCIÓN NECESARIA EN EL NEGOCIO: cierre el servidor en ejecución (las ventanas de python -m pospy) y
+vuelva a iniciarlo con iniciar.cmd. Al arrancar se aplica la migración 13.

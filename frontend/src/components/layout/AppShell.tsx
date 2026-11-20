@@ -3,7 +3,7 @@ import { Suspense, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/Auth';
 import { InventoryProvider, useInventory } from '../../context/Inventory';
-import { useOnline } from '../../lib/hooks';
+import { useApi, useOnline } from '../../lib/hooks';
 import { useRealtimeConnection, useRealtimeEvents, useRealtimeStatus } from '../../lib/realtime';
 import { Button } from '../ui/Button';
 import { ConfirmDialog } from '../ui/Dialog';
@@ -55,6 +55,22 @@ function InventorySwitcher() {
         {options.map((o) => <option key={o.key} value={o.key}>{o.name}{o.group ? ` · ${o.group.name}` : ''}{o.status !== 'activo' ? ` (${o.status})` : ''}</option>)}
       </select>
     </label>
+  );
+}
+
+/** Versión mínima del esquema que necesita esta interfaz. Si el servidor en ejecución es anterior (se actualizó el
+ *  programa sin reiniciar el servidor), se avisa en lugar de fallar con permisos o datos incompletos. */
+export const REQUIRED_SCHEMA = 13;
+
+function ServerVersionNotice() {
+  const health = useApi<{ schema: number; version: string }>('/health');
+  if (typeof health.data?.schema !== 'number' || health.data.schema >= REQUIRED_SCHEMA) return null;
+  return (
+    <div className="offline-banner" role="alert">
+      <TriangleAlert size={20} aria-hidden />
+      El servidor está ejecutando una versión anterior del programa (esquema {health.data.schema}). Ciérrelo y vuelva a
+      iniciarlo con iniciar.cmd para completar la actualización; mientras tanto algunas secciones pueden no funcionar.
+    </div>
   );
 }
 
@@ -141,6 +157,7 @@ function Shell() {
           </div>
         )}
         <UpdatePrompt />
+        <ServerVersionNotice />
         <main id="contenido" className="content" ref={mainRef} tabIndex={-1} key={`${location.pathname.split('/')[1]}:${current?.key ?? ''}`}>
           <Suspense fallback={<Loading />}>
             <Outlet />

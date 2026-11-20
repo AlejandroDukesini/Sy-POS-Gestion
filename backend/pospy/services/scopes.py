@@ -3,13 +3,16 @@
 Reglas (se validan en el servidor en cada operación; la interfaz solo elige):
 - El administrador DUEÑO de un inventario entra siempre (también si está inactivo o archivado) con
   todos los permisos de inventario. Otro administrador no lo ve: para él no existe (404).
-- Un empleado entra a un inventario ACTIVO si es integrante activo del grupo asociado y tiene permisos
-  en ese inventario: los que el administrador le dio (inventory_members) o, si no se los ha definido, los
-  permisos iniciales del inventario cuando «autorizar a los nuevos integrantes» está activo.
+- Un empleado entra a un inventario ACTIVO si es integrante activo del grupo asociado (pertenencia =
+  ACCESO). Lo que puede HACER sale de sus permisos de usuario (Gestión › Usuarios); el administrador
+  puede además RESTRINGIRLOS en un inventario concreto (inventory_members o permisos iniciales propios del
+  inventario). Sin restricción, el empleado conserva en el inventario todos sus permisos de usuario: la
+  pertenencia a un grupo nunca quita funcionalidades.
 - Un inventario sin grupo (empresa que aún no usa grupos, o el «Inventario general» migrado mientras se
-  asocia) admite a quienes tienen permisos explícitos en él y, con la autorización automática, a los
-  empleados que no pertenecen a ningún grupo (con los permisos iniciales del inventario).
-- Permiso efectivo de inventario = permiso del usuario Y permiso en ese inventario.
+  asocia) admite, además de los autorizados explícitamente, a los empleados que no tienen otro inventario
+  donde trabajar (no pertenecen a ningún grupo con inventario). Así nadie se queda sin POS por estar en un
+  grupo que todavía no tiene inventario.
+- Permiso efectivo de inventario = permiso del usuario Y (si existe) la restricción del inventario.
 
 La interfaz envía el inventario elegido en la cabecera X-Inventory (id público «I-…»). La API construye
 para cada petición un Actor con los permisos de ESE inventario (scope_actor) y check() rechaza registros
@@ -23,10 +26,11 @@ from dataclasses import replace
 
 from ..core.actor import Actor
 from ..core.errors import NotFoundError, PermissionDenied, ValidationError
-from ..core.permissions import DEFAULT_INVENTORY_MEMBER, INVENTORY_SCOPED
+from ..core.permissions import ALL, INVENTORY_SCOPED, effective
 
-DEFAULT_SETTINGS = {"auto_authorize": True, "member_permissions": sorted(DEFAULT_INVENTORY_MEMBER),
-                    "allow_negative_stock": None, "low_stock_alerts": True}
+# member_permissions None = sin restricción: cada integrante usa sus permisos de usuario.
+DEFAULT_SETTINGS = {"auto_authorize": True, "member_permissions": None, "allow_negative_stock": None,
+                    "low_stock_alerts": True}
 
 
 def settings_of(raw: str | None) -> dict:
@@ -61,11 +65,15 @@ class InventoryScopes:
         if not cfg["auto_authorize"]:
             return set()
         if inv["group_id"] is None:
-            # Inventario sin grupo (empresa que aún no usa grupos): los empleados que no pertenecen a ningún grupo.
-            in_group = conn.execute("SELECT 1 FROM work_group_members WHERE user_id = ? AND status = 'activo'", (user_id,)).fetchone()
+            # Inventario sin grupo: los empleados que no tienen otro inventario donde trabajar.
             employee = conn.execute("SELECT 1 FROM users WHERE id = ? AND role = 'employee' AND active = 1", (user_id,)).fetchone()
-            if in_group or not employee:
+            # (si el inventario de su grupo está inactivo es una decisión del administrador: no se pasa a otro)
+            elsewhere = conn.execute("SELECT 1 FROM work_group_members m JOIN inventories i ON i.group_id = m.group_id"
+                                     " WHERE m.user_id = ? AND m.status = 'activo'", (user_id,)).fetchone()
+            if elsewhere or not employee:
                 return set()
+        if cfg["member_permissions"] is None:
+            return set(INVENTORY_SCOPED)                 # sin restricción: valen sus permisos de usuario
         return set(cfg["member_permissions"]) & INVENTORY_SCOPED
 
     def _accessible_rows(self, conn: sqlite3.Connection, actor: Actor) -> list[tuple[sqlite3.Row, set[str], bool]]:
@@ -86,16 +94,30 @@ class InventoryScopes:
                 out.append((inv, perms, False))
         return out
 
+    @staticmethod
+    def user_permissions(conn: sqlite3.Connection, actor: Actor) -> frozenset[str]:
+        """Permisos del USUARIO (sin recortar por el inventario de la petición)."""
+        if not actor.id:
+            return actor.permissions
+        row = conn.execute("SELECT role FROM users WHERE id = ?", (actor.id,)).fetchone()
+        if row is None:
+            return actor.permissions
+        if row["role"] == "admin":
+            return ALL
+        assigned = {r[0] for r in conn.execute("SELECT permission FROM user_permissions WHERE user_id = ?", (actor.id,))}
+        return effective(row["role"], assigned)
+
     def accessible(self, conn: sqlite3.Connection, actor: Actor) -> list[dict]:
         """Inventarios a los que entra esta persona (el primero activo es el predeterminado)."""
         result = []
+        mine = self.user_permissions(conn, actor)
         for inv, perms, owner in self._accessible_rows(conn, actor):
             group = conn.execute("SELECT public_id, name, status FROM work_groups WHERE id = ?", (inv["group_id"],)).fetchone() \
                 if inv["group_id"] else None
             result.append({
                 "key": inv["public_id"], "inventory_id": inv["id"], "name": inv["name"], "status": inv["status"],
                 "owner": owner, "group": dict(group) if group else None,
-                "permissions": sorted(perms & actor.permissions) if actor.id else sorted(perms),
+                "permissions": sorted(perms & mine) if actor.id else sorted(perms),
             })
         return result
 

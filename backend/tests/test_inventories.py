@@ -153,11 +153,16 @@ def test_permissions_per_inventory_and_identifier_manipulation(ctx, admin, org):
     inv = org["inv"]
     ana = _client(ctx, "empleado", EMPLOYEE_PASSWORD)
     pid = org["p_arm"]["id"]
-    # Permisos iniciales: vende y consulta, pero no edita productos ni anula
+    # Sin restricción del inventario valen sus permisos de usuario: vende, pero como usuario no edita productos
+    assert ana.post("/api/sales/quote", json={"lines": [{"product_id": pid, "qty": "1"}]}).status_code == 200
     assert ana.put(f"/api/products/{pid}", json={"description": "X"}).status_code == 403
-    ctx.users.update(admin, org["ana"].id, {"permissions": sorted(MEMBER_ASSIGNABLE)})   # como usuario podría todo…
+    ctx.users.update(admin, org["ana"].id, {"permissions": sorted(MEMBER_ASSIGNABLE)})   # como usuario puede todo…
     ana = _client(ctx, "empleado", EMPLOYEE_PASSWORD)
-    assert ana.put(f"/api/products/{pid}", json={"description": "X"}).status_code == 403  # …pero en este inventario no
+    assert ana.put(f"/api/products/{pid}", json={"description": "Y"}).status_code == 200  # …y el inventario no lo restringe
+    ctx.inventories.update(admin, inv["armenia"], {"members": [                          # el administrador lo restringe aquí
+        {"user_id": org["ana"].id, "permissions": ["inventario.ver", "ventas.vender"]}]})
+    assert ana.put(f"/api/products/{pid}", json={"description": "X"}).status_code == 403
+    assert ana.post("/api/sales/quote", json={"lines": [{"product_id": pid, "qty": "1"}]}).status_code == 200
     ctx.inventories.update(admin, inv["armenia"], {"members": [
         {"user_id": org["ana"].id, "permissions": ["inventario.ver", "inventario.editar", "ventas.vender"]}]})
     r = ana.put(f"/api/products/{pid}", json={"description": "Taladro percutor"})

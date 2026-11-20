@@ -55,7 +55,7 @@ export default function InventoryPage() {
     );
   }
   const scopedNames = Object.keys(PERMISSION_LABELS);
-  const mine = current.permissions.filter((p) => scopedNames.includes(p));
+  const mine = (current.permissions ?? []).filter((p) => scopedNames.includes(p));
   return (
     <>
       <PageHeader title={`Inventario · ${current.name}`}
@@ -71,7 +71,7 @@ export default function InventoryPage() {
           Asócielo a un grupo para que sus integrantes trabajen sobre él. <Link to={`/gestion/inventarios/${current.key}`}>Asociar a un grupo</Link>
         </Alert>
       )}
-      {!current.owner && (
+      {!current.owner && Array.isArray(current.permissions) && (
         <details className="muted inventory-perms">
           <summary>Lo que puede hacer en este inventario ({mine.length})</summary>
           <ul>{mine.map((p) => <li key={p}>{PERMISSION_LABELS[p]}</li>)}</ul>

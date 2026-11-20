@@ -86,7 +86,9 @@ class InventoryAdminService:
         if "allow_negative_stock" in raw:
             v = raw["allow_negative_stock"]
             cfg["allow_negative_stock"] = None if v in (None, "", "global") else bool(v)
-        if "member_permissions" in raw:
+        if "member_permissions" in raw and raw["member_permissions"] is None:
+            cfg["member_permissions"] = None             # sin restricción: los permisos de usuario de cada integrante
+        elif "member_permissions" in raw:
             perms = set(raw["member_permissions"] or [])
             if perms - MEMBER_ASSIGNABLE:
                 raise ValidationError("Permisos no válidos para empleados.",
@@ -150,7 +152,8 @@ class InventoryAdminService:
                                (inv["id"], uid)).fetchone()
             user_perms = conn.execute("SELECT permission FROM user_permissions WHERE user_id = ?", (uid,)).fetchall() \
                 if _has_table(conn, "user_permissions") else []
-            effective = sorted(self.scopes.member_permissions(conn, inv, uid))
+            # Lo que realmente puede hacer: permisos de su usuario Y la restricción del inventario (si la hay).
+            effective = sorted(self.scopes.member_permissions(conn, inv, uid) & {r[0] for r in user_perms} & MEMBER_ASSIGNABLE)
             out.append({"id": uid, "full_name": p["full_name"], "username": p["username"], "role": p["role"],
                         "in_group": p["in_group"], "custom": row is not None,
                         "permissions": sorted(json.loads(row["permissions"])) if row else effective,

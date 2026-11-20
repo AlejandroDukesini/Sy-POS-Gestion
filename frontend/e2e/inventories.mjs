@@ -147,8 +147,8 @@ try {
   await beto.getByRole('table', { name: 'Productos del inventario' }).getByText('TAL-01').waitFor();
   await dani.getByRole('heading', { name: 'Inventario · Inventario Bodega' }).waitFor();
   check(await ana.getByRole('heading', { name: 'Seleccione el inventario' }).count() === 0
-    && await ana.getByRole('button', { name: 'Nuevo producto' }).count() === 0,
-  '3 Ana (un inventario) entra directo y, sin permiso de ingresar productos, no ve «Nuevo producto»');
+    && await ana.getByRole('button', { name: 'Nuevo producto' }).count() === 1,
+  '3 Ana (un inventario) entra directo y conserva lo que permite su usuario (ve «Nuevo producto»)');
   check((await dani.getByRole('table', { name: 'Productos del inventario' }).innerText()).includes('Taladro bodega')
     && !(await dani.getByRole('table', { name: 'Productos del inventario' }).innerText()).includes('Martillo'), '   Dani ve solo el inventario de su grupo');
 
@@ -180,11 +180,13 @@ try {
   await admin.goto(`${base}/gestion/inventarios/${armenia}`);
   const anaRow = admin.locator('li', { has: admin.getByText('Ana Caja', { exact: true }) });
   await anaRow.getByRole('button', { name: 'Editar permisos' }).click();
-  await anaRow.getByRole('checkbox', { name: 'Crear, editar y desactivar productos' }).check();
+  await anaRow.getByRole('checkbox', { name: 'Crear, editar y desactivar productos' }).uncheck();
   await admin.getByRole('button', { name: 'Guardar cambios' }).click();
   await admin.getByText('Cambios guardados').first().waitFor();
-  check(await until(async () => await ana.getByRole('button', { name: 'Nuevo producto' }).count() === 1, 20000),
-    '5 El administrador autoriza a Ana a ingresar productos en este inventario y su pantalla se actualiza sola, sin cerrar su sesión');
+  check(await until(async () => await ana.getByRole('button', { name: 'Nuevo producto' }).count() === 0, 20000),
+    '5 El administrador restringe a Ana en este inventario (sin ingresar productos) y su pantalla se actualiza sola, sin cerrar su sesión');
+  const blocked = await emps.ana.api.post(`${base}/api/products`, { headers: H, data: { code: 'X-1', description: 'X', price: '1' } });
+  check(blocked.status() === 403, '   El servidor aplica la misma restricción (403)');
 
   // ---------------------------------------------------------- 6. seguridad y manipulación de identificadores
   const d1 = await emps.dani.api.get(`${base}/api/products/${bro.id}`);
