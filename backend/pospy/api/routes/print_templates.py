@@ -18,6 +18,8 @@ PDF = "application/pdf"
 
 class TemplateNew(Strict):
     name: str = Field(max_length=80)
+    designer: Literal["grid", "canvas"] = "grid"
+    paper: str | None = Field(default=None, max_length=10)
     kind: Literal["documento", "venta", "recibo"] = "documento"
     document_type_id: int | None = None
     discount_pct: str | None = None
@@ -165,3 +167,29 @@ def outputs(target_type: Literal["documento", "venta"], target_id: int, current:
 def output_file(output_id: int, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
     path = app.print_templates.output_file(current, output_id)
     return FileResponse(path, media_type=PDF, filename=path.name)
+
+
+XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _xlsx(data: bytes, name: str) -> Response:
+    return Response(data, media_type=XLSX, headers={"Content-Disposition": f'attachment; filename="{name}"', "Cache-Control": "no-store"})
+
+
+@router.post("/print-templates/{public_id}/preview.xlsx")
+def preview_xlsx(public_id: str, body: TemplatePreview, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    data, name = app.print_templates.preview_xlsx(current, public_id, body.model_dump())
+    return _xlsx(data, name)
+
+
+@router.get("/documents/{doc_id}/template-xlsx")
+def document_xlsx(doc_id: int, template: str | None = None, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    r = app.print_templates.render_document(current, doc_id, template, fmt="xlsx")
+    return _xlsx(r["xlsx"], r["file_name"])
+
+
+@router.get("/sales/{sale_id}/template-xlsx")
+def sale_xlsx(sale_id: int, template: str | None = None, kind: Literal["venta", "recibo"] = "venta",
+              current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    r = app.print_templates.render_sale(current, sale_id, template, kind, fmt="xlsx")
+    return _xlsx(r["xlsx"], r["file_name"])

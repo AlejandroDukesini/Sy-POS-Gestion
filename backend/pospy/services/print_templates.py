@@ -26,10 +26,12 @@ from ..core.actor import Actor
 from ..core.audit import record
 from ..core.clock import iso, parse_date
 from ..core.errors import ConflictError, NotFoundError, ValidationError
+from ..documents import canvas as canvas_mod
 from ..documents import engine, xlsx_import
 from ..documents.excel_safety import ExcelError
 from ..documents.layout import LayoutError, empty_layout, sanitize_layout
 from ..documents.layout_pdf import ImageError, _jpeg_info, _png_objects, page_count, render_pdf
+from ..documents.layout_xlsx import write_xlsx
 from .scopes import InventoryScopes
 
 KINDS = {"documento": "Documento comercial", "venta": "Venta", "recibo": "Recibo"}
@@ -101,6 +103,13 @@ class PrintTemplateService:
         return {p.name for p in folder.iterdir() if re.fullmatch(r"img[-A-Za-z0-9]*\.(jpg|png)", p.name)}
 
     @staticmethod
+    def _design(layout: dict, bindings: dict) -> tuple[dict, dict, list[str]]:
+        """Diseño listo para el motor: un lienzo se compila a cuadrícula; una cuadrícula se usa tal cual."""
+        if isinstance(layout, dict) and layout.get("kind") == "canvas":
+            return canvas_mod.compile_canvas(layout)
+        return layout, bindings, []
+
+    @staticmethod
     def catalog() -> dict:
         return {
             "fields": [{"group": g, "fields": [{"key": k, "label": lbl, "type": t} for k, (lbl, t) in items.items()]}
@@ -121,6 +130,9 @@ class PrintTemplateService:
             dt = conn.execute("SELECT id, code, name FROM document_types WHERE id = ?", (row["document_type_id"],)).fetchone()
             t["document_type"] = dict(dt) if dt else None
         t["has_original"] = bool(row["original_file"])
+        kind = conn.execute("SELECT json_extract(layout, '$.kind') FROM print_template_versions WHERE template_id = ? AND number = ?",
+                            (row["id"], row["current_version"])).fetchone()
+        t["designer"] = "canvas" if kind and kind[0] == "canvas" else "grid"
         t["outputs"] = conn.execute("SELECT COUNT(*) FROM print_outputs o JOIN print_template_versions v"
                                     " ON v.id = o.template_version_id WHERE v.template_id = ?", (row["id"],)).fetchone()[0]
         return t
@@ -155,7 +167,10 @@ class PrintTemplateService:
                 "SELECT v.number, v.note, v.created_at, u.full_name AS created_by_name FROM print_template_versions v"
                 " LEFT JOIN users u ON u.id = v.created_by WHERE v.template_id = ? ORDER BY v.number DESC", (row["id"],))]
         t["layout"], t["bindings"], t["loaded_version"] = v["layout"], v["bindings"], v["number"]
-        t["problems"] = engine.validate(v["layout"], v["bindings"])
+        compiled, cbind, notes = self._design(v["layout"], v["bindings"])
+        t["designer"] = "canvas" if v["layout"].get("kind") == "canvas" else "grid"
+        t["problems"] = engine.validate(compiled, cbind)
+        t["design_notes"] = notes
         t["catalog"] = self.catalog()
         return t
 
@@ -234,9 +249,14 @@ class PrintTemplateService:
         name = (data.get("name") or "").strip()[:80]
         if not name:
             raise ValidationError("Escriba el nombre de la plantilla.", {"name": "Nombre obligatorio."})
-        layout = empty_layout(6, 30)
-        layout["cols"] = [8.0, 12.0, 34.0, 10.0, 14.0, 16.0]
-        bindings = {"cells": {}, "products": None, "discount_pct": "20" if data.get("discount_pct") == "20" else "0"}
+        if data.get("designer") == "canvas":     # editor visual libre (lienzo físico, 80 mm por defecto)
+            layout = canvas_mod.sanitize_canvas(canvas_mod.default_canvas(data.get("paper") or "roll80"), set())
+            layout["discount_pct"] = "20" if data.get("discount_pct") == "20" else "0"
+            bindings: dict = {}
+        else:
+            layout = empty_layout(6, 30)
+            layout["cols"] = [8.0, 12.0, 34.0, 10.0, 14.0, 16.0]
+            bindings = {"cells": {}, "products": None, "discount_pct": "20" if data.get("discount_pct") == "20" else "0"}
         public_id = secrets.token_urlsafe(12)
         self._dir(public_id).mkdir(parents=True)
         return self._insert(actor, inventory, name, kind, doc_type, "editor", layout, bindings, "Plantilla nueva", public_id)
@@ -279,12 +299,9 @@ class PrintTemplateService:
     def save(self, actor: Actor, public_id: str, data: dict) -> dict:
         """Guarda el diseño y las vinculaciones como una versión nueva."""
         actor.require("gestion.configuracion")
-        try:
-            layout = sanitize_layout(data.get("layout"), self._image_files(public_id))
-        except LayoutError as exc:
-            raise ValidationError("Revise el diseño: " + exc.problems[0], {"layout": " ".join(exc.problems)}) from None
-        bindings = self._clean_bindings(data.get("bindings"))
-        problems = engine.validate(layout, bindings)
+        layout, bindings = self._clean_design(public_id, data.get("layout"), data.get("bindings"))
+        compiled, cbind, _ = self._design(layout, bindings)
+        problems = engine.validate(compiled, cbind)
         if problems:
             raise ValidationError("Revise las vinculaciones: " + problems[0], {"bindings": " ".join(problems)})
         activate = bool(data.get("activate"))
@@ -302,6 +319,17 @@ class PrintTemplateService:
                          (number, activate, actor.id, iso(), row["id"]))
             record(conn, actor, "plantilla.guardar", "print_template", row["id"], {"version": number, "activar": activate})
         return self.get(actor, public_id)
+
+    def _clean_design(self, public_id: str, raw_layout: Any, raw_bindings: Any) -> tuple[dict, dict]:
+        """Valida el diseño recibido: lienzo (editor visual) o cuadrícula (Excel importado o diseñado en celdas)."""
+        files = self._image_files(public_id)
+        try:
+            if isinstance(raw_layout, dict) and raw_layout.get("kind") == "canvas":
+                return canvas_mod.sanitize_canvas(raw_layout, files), {}
+            layout = sanitize_layout(raw_layout, files)
+        except LayoutError as exc:
+            raise ValidationError("Revise el diseño: " + exc.problems[0], {"layout": " ".join(exc.problems)}) from None
+        return layout, self._clean_bindings(raw_bindings)
 
     @staticmethod
     def _clean_bindings(raw: Any) -> dict:
@@ -353,7 +381,8 @@ class PrintTemplateService:
                 raise ValidationError("Una plantilla predeterminada debe estar activa.")
             if is_default:
                 v = self._version(conn, row["id"], row["current_version"])
-                problems = engine.validate(v["layout"], v["bindings"])
+                compiled, cbind, _ = self._design(v["layout"], v["bindings"])
+                problems = engine.validate(compiled, cbind)
                 if problems:
                     raise ValidationError("Antes de usarla como predeterminada corrija: " + problems[0])
                 conn.execute("UPDATE print_templates SET is_default = 0 WHERE inventory_id IS ? AND kind = ? AND document_type_id IS ?"
@@ -433,28 +462,37 @@ class PrintTemplateService:
         return path.read_bytes(), "image/png" if name.endswith(".png") else "image/jpeg"
 
     # ------------------------------------------------------------------ vista previa (demostración)
-    def preview(self, actor: Actor, public_id: str, data: dict) -> tuple[bytes, dict]:
-        """PDF de prueba con datos de demostración claramente identificados. Acepta un diseño sin guardar."""
+    def _preview_final(self, actor: Actor, public_id: str, data: dict):
         actor.require("gestion.configuracion")
         with self.db.read() as conn:
             row = self._row(conn, actor, public_id)
             v = self._version(conn, row["id"], row["current_version"])
         layout, bindings = v["layout"], v["bindings"]
         if data.get("layout") is not None:
-            try:
-                layout = sanitize_layout(data["layout"], self._image_files(public_id))
-            except LayoutError as exc:
-                raise ValidationError("Revise el diseño: " + exc.problems[0], {"layout": " ".join(exc.problems)}) from None
-        if data.get("bindings") is not None:
+            layout, bindings = self._clean_design(public_id, data["layout"],
+                                                  data.get("bindings") if data.get("bindings") is not None else bindings)
+        elif data.get("bindings") is not None:
             bindings = self._clean_bindings(data["bindings"])
+        compiled, cbind, design_notes = self._design(layout, bindings)
         lines = max(0, min(200, int(data.get("lines") or 3)))
         demo = engine.demo_data(lines, self._now_local())
         try:
-            final, totals = engine.render(layout, bindings, demo)
+            final, totals = engine.render(compiled, cbind, demo)
         except engine.BindingError as exc:
             raise ValidationError("Revise las vinculaciones: " + exc.problems[0], {"bindings": " ".join(exc.problems)}) from None
+        return row, final, totals, design_notes
+
+    def preview(self, actor: Actor, public_id: str, data: dict) -> tuple[bytes, dict]:
+        """PDF de prueba con datos de demostración claramente identificados. Acepta un diseño sin guardar."""
+        row, final, totals, design_notes = self._preview_final(actor, public_id, data)
         pdf, notes = render_pdf(final, self._images(public_id, final), f"Vista previa {row['name']}")
-        return pdf, {"pages": page_count(pdf), "notes": notes, "totals": {k: str(v) for k, v in totals.items()}}
+        return pdf, {"pages": page_count(pdf), "notes": design_notes + notes, "totals": {k: str(v) for k, v in totals.items()}}
+
+    def preview_xlsx(self, actor: Actor, public_id: str, data: dict) -> tuple[bytes, str]:
+        """Excel de prueba generado con el MISMO diseño final que la vista previa en PDF."""
+        row, final, _, _ = self._preview_final(actor, public_id, data)
+        name = re.sub(r"[^A-Za-z0-9_-]+", "_", row["name"])[:50] or "plantilla"
+        return write_xlsx(final, self._images(public_id, final), row["name"]), f"{name}-demostracion.xlsx"
 
     # ------------------------------------------------------------------ generación real
     def _choose(self, conn, actor: Actor, inventory_id: int | None, kind: str, doc_type: int | None, public_id: str | None):
@@ -484,7 +522,8 @@ class PrintTemplateService:
                  "precio": _dec(r["unit_price_cents"]), "precio_lista": _dec(r["list_price_cents"]),
                  "descuento_linea": _dec(r["discount_cents"]), "iva_pct": Decimal(r["tax_rate_bp"]) / 100} for r in rows]
 
-    def render_document(self, actor: Actor, doc_id: int, public_id: str | None = None, *, required: bool = True) -> dict | None:
+    def render_document(self, actor: Actor, doc_id: int, public_id: str | None = None, *, required: bool = True,
+                        fmt: str = "pdf") -> dict | None:
         """PDF de una cotización, orden u otro documento con su plantilla (la elegida o la predeterminada)."""
         actor.require("documentos.ver")
         with self.db.read() as conn:
@@ -509,9 +548,10 @@ class PrintTemplateService:
                   "cliente_direccion": doc["customer_address"], "cliente_telefono": doc["customer_phone"],
                   "cliente_email": doc["customer_email"], "vendedor": doc["user_name"], "observaciones": doc["notes"],
                   "iva_incluido": _dec(doc["tax_cents"])}
-        return self._emit(actor, row, v, "documento", doc_id, f"{doc['type_name']}-{doc['number']}", header, lines)
+        return self._emit(actor, row, v, "documento", doc_id, f"{doc['type_name']}-{doc['number']}", header, lines, fmt)
 
-    def render_sale(self, actor: Actor, sale_id: int, public_id: str | None = None, kind: str = "venta") -> dict:
+    def render_sale(self, actor: Actor, sale_id: int, public_id: str | None = None, kind: str = "venta",
+                    fmt: str = "pdf") -> dict:
         if not (actor.can("ventas.historial") or actor.can("ventas.vender")):
             actor.require("ventas.historial")
         if kind not in ("venta", "recibo"):
@@ -537,17 +577,23 @@ class PrintTemplateService:
                   "cliente_direccion": customer["address"] if customer else "", "cliente_telefono": customer["phone"] if customer else "",
                   "cliente_email": customer["email"] if customer else "", "vendedor": sale["user_name"], "observaciones": sale["notes"],
                   "iva_incluido": _dec(sale["tax_cents"])}
-        return self._emit(actor, row, v, "venta", sale_id, f"venta-{sale['number']}", header, lines)
+        return self._emit(actor, row, v, "venta", sale_id, f"venta-{sale['number']}", header, lines, fmt)
 
     def _emit(self, actor: Actor, row, v: dict, target_type: str, target_id: int, label: str, header: dict,
-              lines: list[dict]) -> dict:
+              lines: list[dict], fmt: str = "pdf") -> dict:
         data = engine.DocData(header=header, lines=lines, printed_at=self._now_local())
+        compiled, cbind, _ = self._design(v["layout"], v["bindings"])
         try:
-            final, totals = engine.render(v["layout"], v["bindings"], data)
+            final, totals = engine.render(compiled, cbind, data)
         except engine.BindingError as exc:
             raise ValidationError("La plantilla tiene vinculaciones con errores: " + exc.problems[0]) from None
-        pdf, notes = render_pdf(final, self._images(row["public_id"], final), label)
         safe = re.sub(r"[^A-Za-z0-9_-]+", "_", label)[:60]
+        if fmt == "xlsx":                       # Excel real del documento con el mismo diseño final que el PDF
+            xlsx = write_xlsx(final, self._images(row["public_id"], final), label)
+            with self.db.tx() as conn:
+                record(conn, actor, "plantilla.excel", target_type, target_id, {"plantilla": row["name"], "version": v["number"]})
+            return {"xlsx": xlsx, "file_name": f"{safe}.xlsx", "template": row["name"], "version": v["number"]}
+        pdf, notes = render_pdf(final, self._images(row["public_id"], final), label)
         stamp = data.printed_at.strftime("%Y%m%d-%H%M%S")
         folder = self.output_dir / data.printed_at.strftime("%Y-%m")
         folder.mkdir(parents=True, exist_ok=True)

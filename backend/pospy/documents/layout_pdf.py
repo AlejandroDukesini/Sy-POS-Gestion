@@ -167,7 +167,7 @@ def _last_ref(layout: dict) -> str:
 def _paper(page: dict) -> tuple[float, float, bool]:
     paper = page.get("paper") or "letter"
     if paper == "custom":
-        w, h = float(page.get("width_mm") or 215.9), float(page.get("height_mm") or 279.4)
+        w, h = float(page.get("width_mm") or 215.9), float(page.get("height_mm") or 0)   # alto 0 = continuo
     else:
         w, h = PAPERS_MM.get(paper, PAPERS_MM["letter"])
     roll = paper.startswith("roll") or h == 0
@@ -367,6 +367,27 @@ def _draw_text(cv: _Canvas, value: Any, st: dict, box: tuple[float, float, float
         return
     numeric = not isinstance(value, str)
     bx, by, bw, bh = box
+    cr, cg, cb = _rgb(font.get("color"))
+    rot = st.get("rot")
+    if rot in (90, 270):                     # texto girado: una línea, centrada en la caja
+        tw = text_width(text, size, bold)
+        avail = max(1.0, bh - 2 * PAD)
+        if st.get("shrink") and tw > avail:
+            size, tw = max(3.0, size * avail / tw), avail
+        cx, cy, cw, ch = clip_box or box
+        cv.add(b"q %.2f %.2f %.2f %.2f re W n" % (cx, -(cy + ch), cw, ch))
+        if rot == 90:
+            x, y = bx + bw / 2 + size * 0.35, by + bh / 2 + tw / 2
+            matrix = b"0 1 -1 0 %.2f %.2f" % (x, -y)
+        else:
+            x, y = bx + bw / 2 - size * 0.35, by + bh / 2 - tw / 2
+            matrix = b"0 -1 1 0 %.2f %.2f" % (x, -y)
+        cv.add(b"BT %s %.2f Tf %.3f %.3f %.3f rg %s Tm (%s) Tj ET Q" % (_font_ref(font), size, cr, cg, cb, matrix, _escape(text)))
+        return
+    if st.get("shrink") and not st.get("wrap"):   # reducir hasta que quepa (como «Reducir hasta ajustar» de Excel)
+        widest = max(text_width(ln, size, bold) for ln in text.split(chr(10)))
+        if widest > bw - 2 * PAD > 0:
+            size = max(3.0, size * (bw - 2 * PAD) / widest)
     h_align = st.get("h") or ("right" if numeric else "left")
     v_align = st.get("v") or "bottom"
     lines = _wrap(text, size, max(1.0, bw - 2 * PAD), bold) if st.get("wrap") else text.split("\n")
@@ -378,7 +399,6 @@ def _draw_text(cv: _Canvas, value: Any, st: dict, box: tuple[float, float, float
         top = by + (bh - block) / 2
     else:
         top = by + bh - PAD - block
-    cr, cg, cb = _rgb(font.get("color"))
     cx, cy, cw, ch = clip_box or box
     cv.add(b"q %.2f %.2f %.2f %.2f re W n" % (cx, -(cy + ch), cw, ch))
     for i, ln in enumerate(lines):
