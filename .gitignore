@@ -27,3 +27,6 @@ desktop/src-tauri/target/
 desktop/src-tauri/binaries/
 desktop/src-tauri/gen/
 *.log
+
+# Documentos y plantillas personales del negocio (Excel de referencia): nunca al repositorio
+docs/
