@@ -102,6 +102,8 @@
 
 /* Inventario elegido y estado de sincronización (barra superior) */
 .inventory-switch select { min-height: 40px; padding-block: 4px; max-width: 220px; }
+.inventory-switch-btn { max-width: 240px; }
+.inventory-chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inventory-chip { font-weight: 600; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sync-status { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 @media (max-width: 720px) {
@@ -110,4 +112,5 @@
   .topbar-actions { gap: 6px; flex-shrink: 0; }
   .inventory-chip { display: none; }   /* en el teléfono el inventario se ve en el título de la página */
   .inventory-switch select { max-width: 112px; padding-inline: 6px; }
+  .inventory-switch-btn { max-width: 112px; padding-inline: 6px; }
 }

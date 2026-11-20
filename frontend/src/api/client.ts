@@ -68,6 +68,8 @@ interface RequestOptions {
   form?: FormData;
   idempotencyKey?: string;
   signal?: AbortSignal;
+  /** No enviar el inventario elegido (la lista de inventarios no depende de él). */
+  skipInventory?: boolean;
 }
 
 export async function api<T = any>(path: string, opts: RequestOptions = {}): Promise<T> {
@@ -75,7 +77,7 @@ export async function api<T = any>(path: string, opts: RequestOptions = {}): Pro
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (method !== 'GET') headers['X-Requested-With'] = 'pos-py';
   if (opts.idempotencyKey) headers['Idempotency-Key'] = opts.idempotencyKey;
-  if (inventoryKey) headers['X-Inventory'] = inventoryKey;
+  if (inventoryKey && !opts.skipInventory) headers['X-Inventory'] = inventoryKey;
   let body: BodyInit | undefined;
   if (opts.form) body = opts.form;
   else if (opts.body !== undefined) {

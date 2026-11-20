@@ -19,7 +19,7 @@ import { TemplateEditor } from './TemplateEditor';
 export interface TemplateRow {
   public_id: string; name: string; kind: 'documento' | 'venta' | 'recibo'; source: 'excel' | 'editor'; active: number;
   is_default: number; current_version: number; document_type: { id: number; code: string; name: string } | null;
-  group: { key: string; name: string }; outputs: number; updated_at: string; has_original: boolean; original_name?: string;
+  inventory: { key: string; name: string }; outputs: number; updated_at: string; has_original: boolean; original_name?: string;
 }
 
 export const KIND_LABEL: Record<string, string> = { documento: 'Documento', venta: 'Venta', recibo: 'Recibo' };

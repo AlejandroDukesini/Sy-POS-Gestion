@@ -6,13 +6,14 @@ import { AppShell } from '../components/layout/AppShell';
 import { AuthProvider } from '../context/Auth';
 import { ToastProvider } from '../context/Toast';
 import { LoginPage } from '../pages/Login';
+import { inventoryList, isInventoriesList, rememberPermissions } from './inventoryMock';
 
 type Handler = (url: string, init?: RequestInit) => unknown;
 
 function mockApi(handler: Handler) {
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = String(input);
-    const result = handler(url, init) as any;
+    const result = (isInventoriesList(url) ? inventoryList() : handler(url, init)) as any;
     if (result instanceof Response) return result;
     return new Response(JSON.stringify(result ?? {}), { status: 200, headers: { 'content-type': 'application/json' } });
   });
@@ -22,6 +23,7 @@ const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 function me(role: 'admin' | 'employee', permissions: string[]) {
+  rememberPermissions(permissions);
   return { user: { id: 1, username: 'u', full_name: 'Usuaria', role, permissions }, must_change_password: false,
     company: { name: 'Ferretería', primary_color: '#1d4ed8', currency_symbol: '$', timezone: 'America/Bogota' }, desktop: false };
 }

@@ -35,16 +35,24 @@ export function AppShell() {
   return <InventoryProvider><Shell /></InventoryProvider>;
 }
 
-/** Elegir inventario: solo aparece si la persona entra a más de uno. */
+/** Inventario activo. Con 2 se cambia con una lista simple; con 3 o más, desde el panel de selección. */
 function InventorySwitcher() {
   const { options, current, select } = useInventory();
   if (!current) return null;
-  if (options.length < 2) return <span className="inventory-chip" title="Inventario en el que trabaja">{current.name}</span>;
+  const label = current.group ? `${current.name} · ${current.group.name}` : current.name;
+  if (options.length < 2) return <span className="inventory-chip" title={`Inventario activo: ${label}`}>{current.name}</span>;
+  if (options.length >= 3) {
+    return (
+      <Link to="/inventario/seleccionar" className="btn btn-outline btn-sm inventory-switch-btn" title={`Inventario activo: ${label}. Cambiar…`}>
+        <Boxes size={16} aria-hidden /> <span className="inventory-chip-text">{current.name}</span>
+      </Link>
+    );
+  }
   return (
     <label className="inventory-switch">
       <span className="sr-only">Inventario</span>
-      <select className="input" value={current.key} onChange={(e) => select(e.target.value)} title="Inventario en el que trabaja">
-        {options.map((o) => <option key={o.key} value={o.key}>{o.name}{o.status !== 'activo' ? ' (cerrado)' : ''}</option>)}
+      <select className="input" value={current.key} onChange={(e) => select(e.target.value)} title={`Inventario activo: ${label}`}>
+        {options.map((o) => <option key={o.key} value={o.key}>{o.name}{o.group ? ` · ${o.group.name}` : ''}{o.status !== 'activo' ? ` (${o.status})` : ''}</option>)}
       </select>
     </label>
   );

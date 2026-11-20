@@ -5,11 +5,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AuthProvider } from '../context/Auth';
 import { ToastProvider } from '../context/Toast';
 import InventoryPage from '../pages/inventory/InventoryPage';
+import { inventoryList, isInventoriesList, rememberPermissions } from './inventoryMock';
+import { InventoryProvider } from '../context/Inventory';
 
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
-const me = (role: string, permissions: string[]) => ({
+const me = (role: string, permissions: string[]) => (rememberPermissions(permissions), {
   user: { id: 1, username: 'gerente', full_name: 'Gerente', role, permissions },
   must_change_password: false, desktop: false,
   company: { name: 'Ferretería', primary_color: '#1d4ed8', currency_symbol: '$', timezone: 'America/Bogota' },
@@ -32,7 +34,7 @@ function mockApi(routes: (url: string, method: string) => unknown) {
     const method = init?.method ?? 'GET';
     const raw = init?.body;
     calls.push({ url, method, body: typeof raw === 'string' ? JSON.parse(raw) : raw });
-    const out = routes(url, method);
+    const out = isInventoriesList(url) && method === 'GET' ? inventoryList() : routes(url, method);
     return out instanceof Response ? out : json(200, out ?? {});
   });
   return calls;
@@ -41,7 +43,7 @@ function mockApi(routes: (url: string, method: string) => unknown) {
 function renderAt(path: string) {
   return render(
     <MemoryRouter initialEntries={[path]}>
-      <ToastProvider><AuthProvider><Routes><Route path="/inventario/*" element={<InventoryPage />} /></Routes></AuthProvider></ToastProvider>
+      <ToastProvider><AuthProvider><InventoryProvider><Routes><Route path="/inventario/*" element={<InventoryPage />} /></Routes></InventoryProvider></AuthProvider></ToastProvider>
     </MemoryRouter>,
   );
 }

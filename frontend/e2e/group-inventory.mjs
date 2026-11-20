@@ -103,8 +103,10 @@ try {
     emps[p.username] = { ctx, page, api: ctx.request, id: p.id };
   }
   const group = await (await api.post(`${base}/api/groups`, { headers: H, data: { name: 'Sucursal Armenia' } })).json();
-  const G = group.group.public_id;
-  const invite = await (await api.post(`${base}/api/groups/${G}/invitations`, { headers: H, data: { max_uses: 5 } })).json();
+  const groupKey = group.group.public_id;
+  // El administrador crea el inventario del grupo (un inventario por grupo).
+  const G = (await (await api.post(`${base}/api/inventories`, { headers: H, data: { name: 'Sucursal Armenia', group: groupKey } })).json()).key;
+  const invite = await (await api.post(`${base}/api/groups/${groupKey}/invitations`, { headers: H, data: { max_uses: 5 } })).json();
   const token = invite.url.split('/unirse/')[1];
   for (const who of ['ana', 'beto']) await emps[who].api.post(`${base}/api/invitations/${token}/accept`, { headers: H });
   const GH = { ...H, 'X-Inventory': G };
@@ -114,7 +116,7 @@ try {
   const switcher = admin.getByRole('combobox', { name: 'Inventario' });
   await switcher.waitFor();
   const optionsText = await switcher.locator('option').allInnerTexts();
-  check(optionsText.join('|') === 'Inventario general|Sucursal Armenia', `1 El administrador elige entre sus inventarios (${optionsText.join(', ')})`);
+  check(optionsText.join('|') === 'Inventario principal|Sucursal Armenia · Sucursal Armenia', `1 El administrador elige entre sus inventarios (${optionsText.join(', ')})`);
   await switcher.selectOption(G);
   await admin.goto(`${base}/inventario`);
   await admin.getByRole('heading', { name: 'Inventario · Sucursal Armenia' }).waitFor();
@@ -179,9 +181,9 @@ try {
   await dlg.getByLabel('Motivo', { exact: false }).fill('Cliente desistió');
   await dlg.getByRole('button', { name: 'Anular venta' }).click();
   await admin.getByText('Venta anulada', { exact: true }).first().waitFor();
-  const afterVoid = await (await api.get(`${base}/api/products/${prod.id}`)).json();
-  const again = await api.post(`${base}/api/sales/${sale.id}/void`, { headers: H, data: { reason: 'otra vez' } });
-  const hist = (await (await api.get(`${base}/api/movements?product_id=${prod.id}`)).json()).items.map((m) => m.kind);
+  const afterVoid = await (await api.get(`${base}/api/products/${prod.id}`, { headers: GH })).json();
+  const again = await api.post(`${base}/api/sales/${sale.id}/void`, { headers: GH, data: { reason: 'otra vez' } });
+  const hist = (await (await api.get(`${base}/api/movements?product_id=${prod.id}`, { headers: GH })).json()).items.map((m) => m.kind);
   check(afterVoid.stock === '5' && again.status() === 422 && hist.join(',') === 'anulacion_venta,venta,inicial',
     `5 Anular devuelve las 5 unidades, conserva la salida original y no se puede anular dos veces (${hist.join(', ')})`);
   check((await admin.getByText(/anulada por Gerente General/).count()) === 1, '   Queda quién anuló y el motivo');
@@ -200,7 +202,7 @@ try {
   await dlg.getByLabel('Reembolsar con').selectOption({ label: 'Efectivo' });
   await dlg.getByRole('button', { name: 'Registrar devolución' }).click();
   await dlg.waitFor({ state: 'detached' });
-  const pend = await (await api.get(`${base}/api/products/${prod.id}`)).json();
+  const pend = await (await api.get(`${base}/api/products/${prod.id}`, { headers: GH })).json();
   check(pend.stock === '3', `6 Devolución «pendiente de revisión»: no vuelve al inventario todavía (existencia ${pend.stock})`);
   await admin.goto(`${base}/inventario/movimientos`);
   await admin.getByRole('tab', { name: 'Devoluciones' }).click();
@@ -211,7 +213,7 @@ try {
   dlg = admin.getByRole('dialog', { name: /Revisar devolución/ });
   await dlg.getByRole('button', { name: 'Apto: reingresar' }).click();
   await dlg.waitFor({ state: 'detached' });
-  const resolved = await (await api.get(`${base}/api/products/${prod.id}`)).json();
+  const resolved = await (await api.get(`${base}/api/products/${prod.id}`, { headers: GH })).json();
   check(resolved.stock === '5' && await until(async () => (await retRow.innerText()).includes('Apto')),
     `   Al revisarlo como apto vuelve al inventario (existencia ${resolved.stock})`);
   await admin.screenshot({ path: join(shots, '02-devoluciones.png'), fullPage: true });
@@ -221,13 +223,13 @@ try {
     headers: { ...H, 'Idempotency-Key': `e2e-c${i}-${Date.now()}` },
     data: { lines: [{ product_id: prod.id, qty: '4' }], payments: [{ method_id: methods.efectivo, amount: '40000' }] } })));
   const codes = tries.map((r) => r.status()).sort();
-  const fin = await (await api.get(`${base}/api/products/${prod.id}`)).json();
+  const fin = await (await api.get(`${base}/api/products/${prod.id}`, { headers: GH })).json();
   check(codes.join(',') === '200,422' && fin.stock === '1', `7 Dos ventas simultáneas de 4 de 5 unidades: una se rechaza (${codes}), existencia ${fin.stock}`);
   const retry = await emps.ana.api.post(`${base}/api/sales`, { headers: { ...H, 'Idempotency-Key': 'e2e-repetida-0001' },
     data: { lines: [{ product_id: prod.id, qty: '1' }], payments: [{ method_id: methods.efectivo, amount: '10000' }] } });
   const retry2 = await emps.ana.api.post(`${base}/api/sales`, { headers: { ...H, 'Idempotency-Key': 'e2e-repetida-0001' },
     data: { lines: [{ product_id: prod.id, qty: '1' }], payments: [{ method_id: methods.efectivo, amount: '10000' }] } });
-  const zero = await (await api.get(`${base}/api/products/${prod.id}`)).json();
+  const zero = await (await api.get(`${base}/api/products/${prod.id}`, { headers: GH })).json();
   check(retry.ok() && (await retry2.json()).duplicate === true && zero.stock === '0',
     '   Reenviar la misma venta (reconexión) no la duplica');
 
@@ -238,7 +240,7 @@ try {
   const c3 = await caro.api.post(`${base}/api/sales`, { headers: { ...H, 'Idempotency-Key': `e2e-x-${Date.now()}` },
     data: { lines: [{ product_id: prod.id, qty: '1' }], payments: [{ method_id: methods.efectivo, amount: '10000' }] } });
   const c4 = await caro.api.get(`${base}/api/sales/${sale.id}`);
-  check([c1, c2, c3, c4].every((r) => r.status() === 404), '8 Quien no pertenece al grupo no ve ni vende en su inventario, aunque cambie identificadores');
+  check(c1.status() === 403 && [c2, c3, c4].every((r) => r.status() === 404), '8 Quien no pertenece al grupo no ve ni vende en su inventario, aunque cambie identificadores');
   await caro.page.goto(`${base}/inventario`);
   await caro.page.getByRole('table', { name: 'Productos del inventario' }).getByText('GEN-01').waitFor();
   check(await caro.page.getByText('TAL-01').count() === 0, '   Caro (sin grupo) trabaja en el inventario general');

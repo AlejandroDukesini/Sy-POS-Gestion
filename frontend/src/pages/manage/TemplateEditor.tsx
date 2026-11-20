@@ -370,7 +370,7 @@ function Editor({ tpl, reload }: { tpl: any; reload: () => void }) {
         <Link to="/gestion/plantillas" className="btn btn-ghost"><ArrowLeft size={20} aria-hidden /> Plantillas</Link>
         <span className="row" style={{ gap: 6 }}>
           {status}{tpl.is_default ? <Badge kind="info">Predeterminada</Badge> : null}
-          <Badge>{forType}</Badge><Badge>{tpl.group?.name}</Badge>
+          <Badge>{forType}</Badge><Badge>{tpl.inventory?.name}</Badge>
         </span>
       </div>
       <div className="row tpl-titlebar">

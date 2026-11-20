@@ -5,11 +5,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AuthProvider } from '../context/Auth';
 import { ToastProvider } from '../context/Toast';
 import TasksPage from '../pages/tasks/TasksPage';
+import { inventoryList, isInventoriesList, rememberPermissions } from './inventoryMock';
 
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
-const me = (role: string, permissions: string[]) => ({
+const me = (role: string, permissions: string[]) => (rememberPermissions(permissions), {
   user: { id: role === 'admin' ? 1 : 7, username: role === 'admin' ? 'gerente' : 'ana', full_name: role === 'admin' ? 'Gerente' : 'Ana Caja',
     role, permissions },
   must_change_password: false, desktop: false,
@@ -30,7 +31,7 @@ function mockApi(routes: (url: string, method: string) => unknown) {
     const url = String(input);
     const method = init?.method ?? 'GET';
     calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
-    const out = routes(url, method);
+    const out = isInventoriesList(url) && method === 'GET' ? inventoryList() : routes(url, method);
     return out instanceof Response ? out : json(200, out ?? {});
   });
   return calls;

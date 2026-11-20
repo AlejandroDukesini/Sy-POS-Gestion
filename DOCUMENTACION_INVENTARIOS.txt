@@ -1,0 +1,229 @@
+POS-PY — INVENTARIOS POR ADMINISTRADOR, ASOCIADOS A GRUPOS, CON SINCRONIZACIÓN REAL
+Documentación técnica y de pruebas · 19-11-2026
+==========================================================================================
+Rutas relativas a la carpeta del proyecto (CRM-P-COMPANY).
+
+
+1. DIAGNÓSTICO DE LA SINCRONIZACIÓN ANTERIOR Y CAUSA RAÍZ
+------------------------------------------------------------------------------------------
+El canal en tiempo real (SSE) sí funcionaba: las pruebas con sesiones independientes del
+prompt 4 lo comprobaban. El problema era de MODELO DE DATOS. Así lo confirma una copia de la
+base real (backend/data/pospy.db), consultada en modo lectura:
+- Los 3.944 productos y las 3 ventas estaban en el «Inventario general» (group_id NULL).
+- El empleado era integrante activo del grupo «Casa Renault-PRUEBA».
+- En el modelo anterior, el inventario ERA el grupo (products.group_id). Por eso:
+  - el administrador trabajaba, por defecto, en el inventario general;
+  - el empleado, por ser integrante de un grupo, trabajaba en el inventario de su grupo, que
+    estaba VACÍO.
+  Nunca veían el mismo inventario: los cambios de uno no podían aparecer en la pantalla del otro.
+- Además faltaban la entidad «inventario» (dueño, nombre, estado, configuración) y los
+  permisos por inventario. Sin ellos no había forma de asociar el inventario existente a un grupo.
+
+
+2. ARQUITECTURA IMPLEMENTADA
+------------------------------------------------------------------------------------------
+ADMINISTRADOR → INVENTARIOS → GRUPO → INTEGRANTES AUTORIZADOS
+- Un administrador tiene uno o varios inventarios; solo el DUEÑO los ve y los administra (otro
+  administrador recibe «no encontrado»).
+- Cada inventario se asocia a un grupo del mismo administrador. Un grupo tiene como máximo un
+  inventario (índice único).
+- Los integrantes ACTIVOS del grupo entran según los permisos que tienen en ese inventario.
+- Los inventarios son independientes:
+  - productos, existencias, ventas, documentos, movimientos, plantillas y columnas
+    personalizadas son de cada inventario;
+  - el mismo código puede existir en dos inventarios.
+- Inventario sin grupo (la empresa que aún no usa grupos, o el inventario general migrado
+  mientras se asocia): entran el dueño, quien tenga permisos explícitos y, con la autorización
+  automática, los empleados que no pertenecen a ningún grupo. Es la regla de antes.
+- Estados: activo, inactivo o archivado. Inactivo y archivado se consultan pero no registran
+  operaciones, y los empleados dejan de verlos.
+- Configuración propia de cada inventario:
+  - autorización automática de los integrantes;
+  - permisos iniciales;
+  - existencias negativas (usar la configuración general, permitir o no permitir);
+  - alertas de existencias bajas;
+  - columnas personalizadas.
+- Al instalar, el primer administrador empieza con su «Inventario principal», vacío: no se crean
+  productos de ejemplo.
+
+
+3. MODELO DE BASE DE DATOS Y MIGRACIÓN (v013)
+------------------------------------------------------------------------------------------
+- inventories: id, public_id («I-…»), owner_id, group_id (único), name, description, status,
+  settings (JSON), created_by, created_at, updated_at, version. Un trigger impide borrar uno con
+  productos, ventas o documentos.
+- inventory_members: inventory_id, user_id y permissions (JSON). Si un integrante no tiene fila,
+  recibe los permisos iniciales del inventario cuando la autorización automática está activa.
+- products, sales, commercial_documents, print_templates e inventory_columns pasan de group_id a
+  inventory_id NOT NULL. El código del producto es único por inventario, y un trigger impide
+  cambiar un producto de inventario.
+- La migración está escrita en Python (db.py ahora acepta migraciones que son funciones): lee el
+  esquema real de cada tabla y la reconstruye con el procedimiento oficial de SQLite, con las
+  claves foráneas desactivadas y PRAGMA foreign_key_check antes de confirmar.
+Datos existentes (sin borrar nada):
+- Cada grupo con datos recibe un inventario con su nombre. Sus integrantes activos conservan el
+  acceso.
+- El general pasa a «Inventario general» SIN grupo, del primer administrador. No se puede
+  saber a qué grupo pertenece, así que el administrador lo asocia desde Administrar inventarios
+  (proceso controlado). Mientras tanto, el acceso es el de antes.
+- Las columnas personalizadas se copian a cada inventario con sus valores, y las importaciones
+  guardadas apuntan al inventario.
+- Es idempotente: se registra una sola vez y no hace nada si ya se aplicó.
+- Verificada sobre una copia de tu base real:
+  - quedan 3.944 productos, 3 ventas, 2.603 movimientos, 2 columnas y 3.789 valores
+    personalizados;
+  - integrity_check «ok» y foreign_key_check vacío.
+  La prueba automática encontró y se corrigió un error de ids de columnas con varios inventarios
+  (no se manifestaba con tus datos).
+
+
+4. SISTEMA DE PERMISOS
+------------------------------------------------------------------------------------------
+- Permisos por inventario: consultar inventario, ver costos, ingresar y editar productos,
+  modificar cantidades, importar y exportar, observaciones, registrar ventas, descuentos,
+  consultar ventas, cancelar ventas y devoluciones, y documentos.
+  - Administrar columnas y las funciones de administración siguen siendo solo del dueño.
+- Permiso efectivo = permiso del USUARIO (Gestión › Usuarios) Y permiso EN EL INVENTARIO. Nunca
+  da más de lo que ya tenía.
+- Permisos iniciales: consultar, vender, consultar ventas, documentos y observaciones. No se
+  otorgan todos automáticamente.
+- En el servidor, cada petición construye la persona con los permisos del inventario indicado en
+  X-Inventory, o del predeterminado (deps.actor → scopes.scope_actor).
+  - Un registro de otro inventario responde «no encontrado» aunque se manipulen identificadores.
+  - Con la cabecera de un inventario ajeno o inexistente se responde 403 (la misma respuesta en
+    ambos casos, sin revelar nada).
+- Solo se autoriza a integrantes activos del grupo. Si alguien sale del grupo, pierde el acceso
+  aunque tenga permisos guardados.
+- La interfaz usa los mismos permisos: el proveedor de inventario redefine can() con los del
+  inventario activo.
+- Cambiar permisos EN EL INVENTARIO no cierra la sesión y la pantalla se actualiza sola. Cambiar
+  los permisos de USUARIO sí cierra la sesión, por seguridad (comportamiento que ya existía).
+
+
+5. SINCRONIZACIÓN
+------------------------------------------------------------------------------------------
+- La fuente de verdad es la base del servidor. Todo cambio de existencias pasa por
+  apply_movement, dentro de una transacción con BEGIN IMMEDIATE y candado. Ahí también se exigen
+  el inventario activo y la regla de existencias negativas del inventario.
+- Al confirmar, el evento SSE «inventario» llega solo a quienes trabajan en ese inventario: el
+  dueño y los integrantes autorizados. Las pantallas vuelven a pedir los datos al servidor.
+- Cambios de configuración o permisos: evento «configuracion». La lista de inventarios de cada
+  persona se recarga sola.
+- Reconexión: al volver la red se abre un canal nuevo y se recarga todo («resync»).
+- Las ventas usan clave de idempotencia: reintentar no duplica.
+
+
+6. INTERFAZ
+------------------------------------------------------------------------------------------
+- 1 inventario: se entra directo.
+- 2 inventarios: una lista simple en la barra superior.
+- 3 o más: panel de selección («Seleccione el inventario») con tarjetas.
+  - Cada tarjeta muestra grupo, nombre, primer y segundo producto reales, cantidad de
+    productos, existencias, última actualización, estado y el botón para ingresar.
+  - Tiene búsqueda (por nombre, grupo o producto), filtros por grupo y estado, y paginación.
+  - Aparece una vez por sesión; después se cambia con «Cambiar de inventario».
+- El nombre del inventario activo se ve en la barra superior y en el título, con su grupo. El
+  empleado ve también «Lo que puede hacer en este inventario».
+- Gestión › Administrar inventarios (también enlazado desde Configuración):
+  - lista de inventarios;
+  - creación: grupo, nombre, descripción, configuración inicial e integrantes autorizados;
+  - detalle: editar, asociar grupo, permisos por integrante, configuración, activar,
+    desactivar o archivar, ver movimientos y eliminar.
+  - Eliminar solo es posible si el inventario no tiene historia; con historia se desactiva o
+    archiva.
+- Si un inventario no tiene grupo, se muestra un aviso para asociarlo.
+
+
+7. ARCHIVOS
+------------------------------------------------------------------------------------------
+Creados:
+- backend: pospy/migrations/v013_inventories.py, pospy/services/inventories.py,
+  pospy/api/routes/inventories.py, tests/test_inventories.py.
+- frontend: src/pages/inventory/InventorySelector.tsx, src/pages/manage/Inventories.tsx,
+  src/test/inventories.test.tsx, src/test/inventoryMock.ts, e2e/inventories.mjs.
+- Este documento.
+Modificados:
+- backend: db.py, core/actor.py, core/permissions.py, api/deps.py, api/app.py,
+  api/routes/inventory.py, context.py, services/{scopes,inventory,columns,sales,documents,
+  observations,sync,print_templates,auth}.py, migrations/__init__.py, tests/{conftest,
+  test_group_inventory,test_observations,test_print_templates}.py.
+- frontend: api/client.ts, context/{Auth,Inventory}.tsx, components/layout/AppShell.tsx,
+  components/ui/Form.tsx, pages/inventory/InventoryPage.tsx,
+  pages/manage/{ManageRoutes,PrintTemplates,TemplateEditor}.tsx, pages/SettingsPage.tsx,
+  styles/{components,layout}.css, src/test/{inventory-columns,notes-tasks,screens}.test.tsx,
+  e2e/group-inventory.mjs.
+Eliminados: ninguno.
+
+
+8. PRUEBAS EJECUTADAS (resultados reales, 19-11-2026)
+------------------------------------------------------------------------------------------
+Backend (pytest): 207 pasan (198 anteriores + 9 nuevas en test_inventories.py). ruff sin errores.
+Las nuevas cubren:
+- 3 inventarios independientes y el mismo código en dos de ellos;
+- tarjetas con productos reales y estado vacío;
+- otro administrador sin acceso, grupo ajeno rechazado, un grupo con un solo inventario;
+- empleados solo en el inventario de su grupo; el empleado sin grupo en el principal;
+- sincronización por HTTP entre CUATRO sesiones independientes (administrador, Ana, Beto y
+  Dani): los productos y la venta se ven en las otras sesiones, el evento llega solo a ese
+  inventario y la venta no se duplica;
+- permisos por inventario (el del usuario no basta), manipulación de identificadores,
+  autorizar solo a integrantes y pérdida de acceso al salir del grupo;
+- autorización automática desactivada;
+- inactivo, existencias negativas por inventario y eliminación segura;
+- columnas por inventario;
+- asociación del inventario migrado;
+- migración real de v012 a v013 (datos, integrantes, columnas, idempotencia e integridad).
+Frontend: tsc y eslint sin errores. vitest: 88 pasan, 4 nuevas:
+- 1 inventario entra directo;
+- 3 o más muestran el panel, con búsqueda y la cabecera X-Inventory al ingresar;
+- permisos en pantalla del inventario activo;
+- estado sin inventarios.
+Extremo a extremo con Edge real y servidor real (frontend/e2e/inventories.mjs), con CINCO
+contextos de navegador independientes (cookies distintas): todo correcto.
+- creación desde la interfaz con integrantes;
+- panel con 4 inventarios y filtro;
+- Ana entra directo y no ve «Nuevo producto»;
+- Dani solo ve su inventario;
+- el producto del administrador aparece en la pantalla de Ana en unos 0,7 s;
+- la venta de Ana aparece en la de Beto en unos 0,3 s y en los movimientos del administrador,
+  y no llega a Dani;
+- el administrador autoriza a Ana en el inventario y su pantalla cambia sin recargar ni cerrar
+  sesión;
+- Dani manipula identificadores: respuestas 404 y 403;
+- Beto pierde la red y al volver ve la venta hecha mientras estaba desconectado;
+- dos ventas simultáneas de las últimas unidades: una se rechaza;
+- el inventario sin grupo se asocia a un grupo y Caro sigue trabajando en él;
+- teléfono de 360 px sin desplazamiento horizontal.
+Regresión E2E: inventories, group-inventory (adaptada al modelo nuevo), print-templates, smoke,
+groups, notes-tasks y columns-group-tasks pasan.
+Sin probar: la sincronización entre equipos distintos por Internet en este módulo (el canal es
+el mismo que se probó con túnel en el módulo de grupos). Pruebas manuales: ninguna.
+
+
+9. PROBLEMAS DETECTADOS Y PENDIENTES
+------------------------------------------------------------------------------------------
+- ACCIÓN NECESARIA: tras actualizar, en Gestión › Administrar inventarios, asocie «Inventario
+  general» (sus 3.944 productos) al grupo «Casa Renault-PRUEBA». Desde ese momento el empleado
+  trabaja sobre el mismo inventario que usted.
+- Las importaciones automáticas de integraciones (conexiones programadas) van al inventario
+  configurado en la conexión. Si no tiene uno, van al primer inventario activo. Aún no hay un
+  selector de inventario en la pantalla de conexiones.
+- Las tareas de grupo siguen ligadas al grupo, no al inventario.
+- La respuesta 403 para una cabecera ajena es una decisión deliberada (ver el punto 4).
+
+
+10. CÓMO PROBAR CON DOS O MÁS USUARIOS
+------------------------------------------------------------------------------------------
+1. Inicie con iniciar.cmd. En Gestión › Usuarios cree dos empleados. Con permisos de usuario de
+   venta y consulta basta para empezar.
+2. En Grupos cree «Sucursal Armenia» e invite a ambos con el enlace. Cada uno lo abre en SU
+   equipo o navegador (no en la misma ventana) y acepta.
+3. Gestión › Administrar inventarios › Nuevo inventario: elija el grupo, póngale nombre, deje
+   marcados a los integrantes y créelo. O asocie el «Inventario general» a ese grupo.
+4. Con tres navegadores abiertos en Inventario, ingrese un producto como administrador: aparece
+   en los otros dos. Venda desde un empleado: la existencia baja en los demás y el movimiento
+   aparece en Movimientos de inventario.
+5. En el detalle del inventario cambie los permisos de un empleado: su pantalla se actualiza sola.
+Pruebas automáticas:
+- cd backend && .venv\Scripts\python -m pytest -q
+- cd frontend && npm test && npm run build && node e2e/inventories.mjs

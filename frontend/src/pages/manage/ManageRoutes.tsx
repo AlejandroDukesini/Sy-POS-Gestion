@@ -1,4 +1,4 @@
-import { Activity, ArrowLeft, BarChart3, Building2, CreditCard, DatabaseBackup, FileSpreadsheet, FolderSync, LayoutTemplate, Printer, ShieldCheck,
+import { Activity, ArrowLeft, Boxes, BarChart3, Building2, CreditCard, DatabaseBackup, FileSpreadsheet, FolderSync, LayoutTemplate, Printer, ShieldCheck,
   SlidersHorizontal, Tags, Truck, Users, UserSquare2 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Link, Route, Routes } from 'react-router-dom';
@@ -10,6 +10,7 @@ import { BackupsPage } from './Backups';
 import { CategoriesPage, PartiesPage, PaymentMethodsPage } from './Catalogs';
 import { DocumentTypesPage } from './DocumentTypes';
 import { IntegrationsPage } from './Integrations';
+import { InventoriesPage } from './Inventories';
 import { PrintTemplatesPage } from './PrintTemplates';
 import { SecurityPanel } from './Security';
 import { CompanyPage, PrintingPage, SettingsSection } from './Settings';
@@ -23,6 +24,7 @@ export const MANAGE_ITEMS: Item[] = [
   { to: 'usuarios', title: 'Empleados, usuarios y permisos', desc: 'Empleados (con o sin cuenta), roles, permisos y bloqueos.', icon: <Users size={28} />, perms: ['gestion.usuarios'], group: 'Personas' },
   { to: 'clientes', title: 'Clientes', desc: 'Datos de clientes y días de crédito.', icon: <UserSquare2 size={28} />, perms: ['terceros.gestionar'], group: 'Personas' },
   { to: 'proveedores', title: 'Proveedores', desc: 'Expediente por proveedor: contacto, asesor, pendientes, visitas, cotizaciones y lista de productos.', icon: <Truck size={28} />, perms: ['terceros.gestionar'], group: 'Personas' },
+  { to: 'inventarios', title: 'Administrar inventarios', desc: 'Sus inventarios, el grupo de cada uno, integrantes, permisos y configuración.', icon: <Boxes size={28} />, perms: ['grupos.gestionar'], group: 'Operación' },
   { to: 'categorias', title: 'Categorías de productos', desc: 'Agrupe el inventario para filtrar y reportar.', icon: <Tags size={28} />, perms: ['gestion.configuracion'], group: 'Operación' },
   { to: 'documentos', title: 'Tipos de documento y plantillas', desc: 'Cotizaciones, órdenes y otros documentos en Excel.', icon: <FileSpreadsheet size={28} />, perms: ['gestion.configuracion'], group: 'Operación' },
   { to: 'plantillas', title: 'Plantillas de impresión', desc: 'Importe el Excel de la empresa o diseñe cotizaciones, órdenes y ventas: campos, tabla de productos, cálculos y PDF.', icon: <LayoutTemplate size={28} />, perms: ['gestion.configuracion'], group: 'Operación' },
@@ -85,6 +87,7 @@ export default function ManageRoutes() {
       <Route path="proveedores/:id/*" element={guard('proveedores', <SupplierDashboard />)} />
       <Route path="categorias" element={guard('categorias', <CategoriesPage />)} />
       <Route path="documentos/*" element={guard('documentos', <DocumentTypesPage />)} />
+      <Route path="inventarios/*" element={guard('inventarios', <InventoriesPage />)} />
       <Route path="plantillas/*" element={guard('plantillas', <PrintTemplatesPage />)} />
       <Route path="metodos-pago" element={guard('metodos-pago', <PaymentMethodsPage />)} />
       <Route path="parametros" element={guard('parametros', (

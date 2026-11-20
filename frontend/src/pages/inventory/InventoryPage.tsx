@@ -1,6 +1,6 @@
-import { ArrowDownToLine, ArrowUpFromLine, ClipboardCheck, ClipboardList, History, Pencil, Plus, Power, Search, X } from 'lucide-react';
+import { ArrowDownToLine, Boxes, ArrowUpFromLine, ClipboardCheck, ClipboardList, History, Pencil, Plus, Power, Search, X } from 'lucide-react';
 import { Fragment, useState } from 'react';
-import { Link, Route, Routes, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, Route, Routes, useLocation, useSearchParams } from 'react-router-dom';
 import { put, qs } from '../../api/client';
 import { Button } from '../../components/ui/Button';
 import { ConfirmDialog } from '../../components/ui/Dialog';
@@ -9,7 +9,8 @@ import { Checkbox, SelectField, TextField } from '../../components/ui/Form';
 import { Card, LinkTabs, Metric, PageHeader } from '../../components/ui/Layout';
 import { DataTable, Pagination, type Column } from '../../components/ui/Table';
 import { useAuth } from '../../context/Auth';
-import { useInventory } from '../../context/Inventory';
+import { PERMISSION_LABELS, useInventory } from '../../context/Inventory';
+import { InventorySelector } from './InventorySelector';
 import { useToast } from '../../context/Toast';
 import { dateTime, money, pct, qty } from '../../lib/format';
 import { useApi, useDebounced, useOnline } from '../../lib/hooks';
@@ -29,15 +30,56 @@ export interface Product {
 }
 
 export default function InventoryPage() {
-  const { can } = useAuth();
-  const { current } = useInventory();
+  const { can, user } = useAuth();
+  const { current, options, chosen } = useInventory();
+  const location = useLocation();
+  const selecting = location.pathname.startsWith('/inventario/seleccionar');
+  if (!current) {
+    return (
+      <EmptyState title="No tiene inventarios asignados" icon={<Boxes size={40} aria-hidden />}>
+        <p>{user?.role === 'admin' ? 'Cree su primer inventario en Gestión › Administrar inventarios.'
+          : 'Pida al administrador que lo autorice en el inventario de su grupo.'}</p>
+        {user?.role === 'admin' && <Link className="btn btn-primary" to="/gestion/inventarios">Administrar inventarios</Link>}
+      </EmptyState>
+    );
+  }
+  // Con 3 o más inventarios se elige primero en el panel (una vez por sesión); con 1 o 2 se entra directo.
+  if (options.length >= 3 && !chosen && !selecting) return <Navigate to="/inventario/seleccionar" replace />;
+  if (selecting) {
+    return (
+      <>
+        <PageHeader title="Seleccione el inventario" description={`Tiene ${options.length} inventarios. Elija en cuál va a trabajar.`}
+          actions={user?.role === 'admin' ? <Link className="btn btn-outline" to="/gestion/inventarios">Administrar inventarios</Link> : undefined} />
+        <InventorySelector />
+      </>
+    );
+  }
+  const scopedNames = Object.keys(PERMISSION_LABELS);
+  const mine = current.permissions.filter((p) => scopedNames.includes(p));
   return (
     <>
-      <PageHeader title={current ? `Inventario · ${current.name}` : 'Inventario'}
-        description="Consulte existencias y registre entradas, salidas y ajustes. Todos los integrantes trabajan sobre este mismo inventario." />
+      <PageHeader title={`Inventario · ${current.name}`}
+        description={current.group ? `Grupo ${current.group.name}. Todos los integrantes autorizados trabajan sobre este mismo inventario.`
+          : 'Inventario sin grupo asociado.'}
+        actions={<>
+          {current.status !== 'activo' && <Badge kind="warning">{current.status === 'inactivo' ? 'Inactivo: solo consulta' : 'Archivado: solo consulta'}</Badge>}
+          {options.length >= 3 && <Link className="btn btn-outline" to="/inventario/seleccionar">Cambiar de inventario</Link>}
+          {current.owner && <Link className="btn btn-ghost" to={`/gestion/inventarios/${current.key}`}>Configurar</Link>}
+        </>} />
+      {current.owner && !current.group && (
+        <Alert kind="warning" title="Este inventario no está asociado a un grupo">
+          Asócielo a un grupo para que sus integrantes trabajen sobre él. <Link to={`/gestion/inventarios/${current.key}`}>Asociar a un grupo</Link>
+        </Alert>
+      )}
+      {!current.owner && (
+        <details className="muted inventory-perms">
+          <summary>Lo que puede hacer en este inventario ({mine.length})</summary>
+          <ul>{mine.map((p) => <li key={p}>{PERMISSION_LABELS[p]}</li>)}</ul>
+        </details>
+      )}
       <LinkTabs label="Secciones de inventario" tabs={[
         { to: '/inventario', label: 'Productos', end: true },
-        { to: '/inventario/movimientos', label: 'Movimientos de inventario' },
+        ...(can('inventario.ver') ? [{ to: '/inventario/movimientos', label: 'Movimientos de inventario' }] : []),
         ...(can('observaciones.ver') ? [{ to: '/inventario/observaciones', label: 'Observaciones' }] : []),
         ...(can('inventario.importar') ? [{ to: '/inventario/importar', label: 'Importar y exportar' }] : []),
         ...(can('inventario.columnas') ? [{ to: '/inventario/columnas', label: 'Administrar columnas' }] : []),

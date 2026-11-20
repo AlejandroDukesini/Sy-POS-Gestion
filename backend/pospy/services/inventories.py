@@ -180,11 +180,17 @@ class InventoryAdminService:
         """Grupos del administrador y si ya tienen inventario (para el formulario)."""
         actor.require("grupos.gestionar")
         with self.db.read() as conn:
-            return [dict(r) for r in conn.execute(
-                "SELECT g.public_id AS key, g.name, g.status, i.name AS inventory_name,"
-                " (SELECT COUNT(*) FROM work_group_members m WHERE m.group_id = g.id AND m.status = 'activo') AS members"
-                " FROM work_groups g LEFT JOIN inventories i ON i.group_id = g.id WHERE g.owner_id = ? ORDER BY g.name COLLATE NOCASE",
-                (actor.id,))]
+            out = []
+            for r in conn.execute("SELECT g.id, g.public_id AS key, g.name, g.status, i.name AS inventory_name, i.public_id AS inventory_key"
+                                  " FROM work_groups g LEFT JOIN inventories i ON i.group_id = g.id WHERE g.owner_id = ?"
+                                  " ORDER BY g.name COLLATE NOCASE", (actor.id,)).fetchall():
+                g = dict(r)
+                g["members"] = [dict(m) for m in conn.execute(
+                    "SELECT u.id, u.full_name, u.username FROM work_group_members m JOIN users u ON u.id = m.user_id"
+                    " WHERE m.group_id = ? AND m.status = 'activo' AND u.role = 'employee' ORDER BY u.full_name COLLATE NOCASE",
+                    (g.pop("id"),))]
+                out.append(g)
+            return out
 
     # ------------------------------------------------------------------ crear y editar
     def _validate(self, data: dict, partial: bool = False) -> dict:

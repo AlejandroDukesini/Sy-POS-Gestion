@@ -60,7 +60,7 @@ type SelectProps = Omit<SelectHTMLAttributes<HTMLSelectElement>, 'onChange'> & {
   label: string;
   error?: string;
   hint?: string;
-  options: { value: string | number; label: string }[];
+  options: { value: string | number; label: string; disabled?: boolean }[];
   placeholder?: string;
   onChange: (value: string) => void;
 };
@@ -72,7 +72,7 @@ export function SelectField({ label, error, hint, required, options, placeholder
         <select id={id} className="select" aria-describedby={describedBy} aria-invalid={invalid || undefined}
           required={required} onChange={(e) => onChange(e.target.value)} {...rest}>
           {placeholder !== undefined && <option value="">{placeholder}</option>}
-          {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          {options.map((o) => <option key={o.value} value={o.value} disabled={o.disabled}>{o.label}</option>)}
         </select>
       )}
     </Field>

@@ -38,7 +38,7 @@ export default function SettingsPage() {
       setBusy(false);
     }
   };
-  const adminLinks = MANAGE_ITEMS.filter((i) => ['empresa', 'parametros', 'integraciones', 'documentos', 'impresion', 'usuarios', 'seguridad', 'respaldos', 'actividad']
+  const adminLinks = MANAGE_ITEMS.filter((i) => ['inventarios', 'empresa', 'parametros', 'integraciones', 'documentos', 'impresion', 'usuarios', 'seguridad', 'respaldos', 'actividad']
     .includes(i.to) && canAny(...i.perms));
 
   return (
