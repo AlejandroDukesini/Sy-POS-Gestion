@@ -195,7 +195,7 @@ function TemplateCard({ type, onChanged }: { type: any; onChanged: () => void })
           Use su archivo de Excel tal como está y escriba marcadores donde van los datos: {'{{numero}}'}, {'{{fecha}}'}, {'{{cliente_nombre}}'},
           {' {{total}}'}… En la primera fila de productos: {'{{linea.codigo}}'}, {'{{linea.descripcion}}'}, {'{{linea.cantidad}}'}, {'{{linea.precio}}'},
           {' {{linea.total}}'}. Los formatos, fórmulas, bordes y celdas combinadas se conservan. Si la plantilla tiene imágenes o gráficos,
-          se rellena con Microsoft Excel para no perderlos.
+          se conservan intactos (no se necesita Microsoft Excel). Todos los marcadores son opcionales: use solo los que necesite.
         </Alert>
         <ErrorAlert error={error} />
         <div className="row">
@@ -215,7 +215,7 @@ function TemplateCard({ type, onChanged }: { type: any; onChanged: () => void })
               ? <Alert kind="danger" title="La plantilla no coincide con el mapeo"><ul>{type.template_problems.map((p: string) => <li key={p}>{p}</li>)}</ul></Alert>
               : <Alert kind="success">Plantilla lista. Hoja «{mapping.sheet}», productos desde la fila {mapping.line_row}.</Alert>}
             {type.template_needs_excel?.length > 0 && (
-              <Alert kind="warning">La plantilla contiene {type.template_needs_excel.join(', ')}: se necesita Microsoft Excel en el equipo del servidor para generarla.</Alert>
+              <Alert kind="info">La plantilla contiene {type.template_needs_excel.join(', ')}: se conservan al generar el documento (no se necesita Microsoft Excel; las macros nunca se ejecutan).</Alert>
             )}
             {mapping.line_row > 0 && (
               <div style={{ maxWidth: 320 }}>

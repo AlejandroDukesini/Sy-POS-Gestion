@@ -12,8 +12,9 @@ coincidir con el mapeo se lanza TemplateMappingError con la lista de problemas, 
 producir un documento incorrecto. Las fórmulas de la plantilla (p. ej. =SUMA(F11:F30)) se conservan
 y se recalculan al abrir el archivo.
 
-Limitaciones (openpyxl): no conserva imágenes, gráficos ni formas al guardar. Si la plantilla los
-contiene, el relleno se hace con Microsoft Excel (COM); sin Excel instalado se informa el motivo.
+Plantillas con imágenes, gráficos, formas o macros: openpyxl los perdería al guardar, así que en ese caso
+se escriben solo las celdas en el XML de la hoja y el resto del archivo se copia intacto (sin Microsoft Excel).
+El PDF y la impresión usan el motor propio (render_layout), tampoco necesitan Excel.
 """
 from __future__ import annotations
 
@@ -28,7 +29,6 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import column_index_from_string, coordinate_to_tuple, get_column_letter
 
-from . import com_excel
 from .excel_safety import ExcelError, ensure_workbook, sha256, unsupported_parts
 
 HEADER_FIELDS: dict[str, str] = {
@@ -60,8 +60,8 @@ LINE_FIELDS: dict[str, str] = {
     "precio_lista": "Precio sin descuento", "precio": "Precio unitario", "descuento": "Descuento",
     "iva_pct": "IVA %", "total": "Total línea",
 }
-REQUIRED_HEADER = ("numero", "cliente_nombre", "total")
-REQUIRED_LINE = ("descripcion", "cantidad")
+REQUIRED_HEADER: tuple[str, ...] = ()        # todos los datos son opcionales
+REQUIRED_LINE: tuple[str, ...] = ()
 NUMERIC = {"subtotal", "descuento", "base", "iva", "total", "linea.cantidad", "linea.precio", "linea.precio_lista",
            "linea.descuento", "linea.total", "linea.n", "linea.iva_pct"}
 PLACEHOLDER = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_\.]*)\s*\}\}")
@@ -194,14 +194,8 @@ def validate(path: Path, mapping: Mapping) -> list[str]:
     problems: list[str] = []
     if not mapping.sheet:
         return ["La plantilla no ha sido analizada."]
-    for fld in REQUIRED_HEADER:
-        if fld not in mapping.fields:
-            problems.append(f"Falta el campo obligatorio «{HEADER_FIELDS[fld]}» ({{{{{fld}}}}}).")
-    if not mapping.line_row:
-        problems.append("No se encontró la fila de productos ({{linea.descripcion}}, {{linea.cantidad}}…).")
-    for fld in REQUIRED_LINE:
-        if mapping.line_row and fld not in mapping.line_columns:
-            problems.append(f"Falta la columna de productos «{LINE_FIELDS[fld]}» ({{{{linea.{fld}}}}}).")
+    # Ningún dato es obligatorio: la plantilla usa solo los que necesita (los demás no se imprimen). Solo se
+    # bloquea lo que haría un documento incorrecto: un marcador asignado que ya no está donde se esperaba.
     ensure_workbook(path)
     wb = openpyxl.load_workbook(path, data_only=False)
     try:
@@ -248,7 +242,7 @@ def _fill(template_value: Any, values: dict[str, Any], prefix: str = "") -> Any:
 
 
 def build_cells(mapping: Mapping, header: dict[str, Any], lines: list[dict[str, Any]], template_values: dict[str, Any]) -> dict:
-    if len(lines) > mapping.capacity:
+    if mapping.line_row and len(lines) > mapping.capacity:     # sin fila de productos: la plantilla no los lista
         raise TemplateMappingError([f"El documento tiene {len(lines)} líneas y la plantilla admite {mapping.capacity}. "
                                     "Amplíe la zona de productos de la plantilla o divida el documento."])
     cells: dict[str, Any] = {}
@@ -279,10 +273,8 @@ def render(template: Path, mapping: Mapping, out: Path, header: dict, lines: lis
     shutil.copy2(template, tmp)
     try:
         if unsupported_parts(template):
-            if not com_excel.com_available():
-                raise ExcelError("La plantilla contiene " + ", ".join(unsupported_parts(template)) +
-                                 ". Para conservarlos se necesita Microsoft Excel instalado en el equipo del servidor.")
-            com_excel.write_cells(tmp, mapping.sheet, cells, page_setup)
+            # Imágenes, formas o macros: se escriben las celdas directamente en el XML (sin Microsoft Excel).
+            write_cells_xml(template, tmp, mapping.sheet, cells, page_setup)
         else:
             wb = openpyxl.load_workbook(tmp, data_only=False, keep_vba=tmp.suffix.lower() == ".xlsm")
             ws = wb[mapping.sheet]
@@ -299,6 +291,185 @@ def render(template: Path, mapping: Mapping, out: Path, header: dict, lines: lis
         except PermissionError:   # Excel aún libera el archivo; se reemplaza en la próxima generación
             pass
     return out
+
+
+# --------------------------------------------------------------------------- relleno sin Microsoft Excel
+# Para plantillas con imágenes, formas o macros: se escriben solo las celdas en el XML de la hoja y todo lo demás
+# del archivo (dibujos, macros, estilos, fórmulas) se copia byte a byte. No se necesita Excel instalado.
+_CELL_TAG = re.compile(r"<c\s[^>]*?r=\"([A-Z]{1,3})(\d+)\"[^>]*?(?:/>|>.*?</c>)", re.DOTALL)
+
+
+def _xml_escape(text: str) -> str:
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _cell_xml(col: str, row: int, style: str, value: Any) -> str:
+    s = f' s="{style}"' if style else ""
+    ref = f"{col}{row}"
+    if value is None or value == "":
+        return f'<c r="{ref}"{s}/>'
+    if isinstance(value, bool):
+        return f'<c r="{ref}"{s} t="b"><v>{int(value)}</v></c>'
+    if isinstance(value, (int, float)):
+        return f'<c r="{ref}"{s}><v>{value!r}</v></c>'
+    return f'<c r="{ref}"{s} t="inlineStr"><is><t xml:space="preserve">{_xml_escape(str(value))}</t></is></c>'
+
+
+def _set_cells_in_sheet(xml: str, cells: dict[str, Any]) -> str:
+    rows: dict[int, dict[str, Any]] = {}
+    for coord, value in cells.items():
+        r, c = coordinate_to_tuple(coord)
+        rows.setdefault(r, {})[get_column_letter(c)] = value
+    for r in sorted(rows):
+        row_re = re.compile(r"<row\s[^>]*?r=\"%d\"[^>]*?(/>|>(.*?)</row>)" % r, re.DOTALL)
+        m = row_re.search(xml)
+        if m:
+            open_tag = m.group(0)[:m.group(0).index(">") + 1]
+            if open_tag.endswith("/>"):
+                open_tag = open_tag[:-2].rstrip() + ">"
+            body = m.group(2) or ""
+        else:
+            open_tag, body = f'<row r="{r}">', ""
+        existing: dict[int, tuple[str, str]] = {}          # columna → (xml de la celda, estilo)
+        for cm in _CELL_TAG.finditer(body):
+            st = re.search(r'\ss="(\d+)"', cm.group(0)[:cm.group(0).index(">") + 1])
+            existing[column_index_from_string(cm.group(1))] = (cm.group(0), st.group(1) if st else "")
+        for col, value in rows[r].items():
+            ci = column_index_from_string(col)
+            style = existing.get(ci, ("", ""))[1]
+            existing[ci] = (_cell_xml(col, r, style, value), style)
+        new_row = open_tag + "".join(existing[ci][0] for ci in sorted(existing)) + "</row>"
+        # las celdas vacías sin estilo no se escriben (como Excel)
+        if m:
+            xml = xml[:m.start()] + new_row + xml[m.end():]
+        else:
+            after = None
+            for rm in re.finditer(r"<row\s[^>]*?r=\"(\d+)\"", xml):
+                if int(rm.group(1)) > r:
+                    after = rm.start()
+                    break
+            if after is not None:
+                xml = xml[:after] + new_row + xml[after:]
+            elif "<sheetData/>" in xml:
+                xml = xml.replace("<sheetData/>", f"<sheetData>{new_row}</sheetData>", 1)
+            else:
+                xml = xml.replace("</sheetData>", new_row + "</sheetData>", 1)
+    return xml
+
+
+def _set_attrs(xml: str, tag: str, attrs: dict[str, str]) -> str:
+    m = re.search(r"<%s\b[^>]*?/?>" % tag, xml)
+    if not m:
+        return xml
+    el = m.group(0)
+    for k, v in attrs.items():
+        if re.search(r'\s%s="[^"]*"' % k, el):
+            el = re.sub(r'(\s%s=)"[^"]*"' % k, r'\g<1>"%s"' % v, el)
+        else:
+            el = el.replace(f"<{tag}", f'<{tag} {k}="{v}"', 1)
+    return xml[:m.start()] + el + xml[m.end():]
+
+
+def _page_setup_xml(xml: str, setup: dict) -> str:
+    if not setup:
+        return xml
+    margin_in = f"{float(setup.get('margins_cm', 1.5)) / 2.54:.4f}"
+    xml = _set_attrs(xml, "pageMargins", {"left": margin_in, "right": margin_in, "top": margin_in, "bottom": margin_in})
+    attrs = {"orientation": "landscape" if setup.get("orientation") == "landscape" else "portrait",
+             "paperSize": str(PAPER.get(str(setup.get("paper", "letter")).lower(), 1))}
+    if setup.get("fit_width", True):
+        attrs.update(fitToWidth="1", fitToHeight="0")
+    else:
+        attrs["scale"] = str(max(10, min(400, int(setup.get("scale", 100)))))
+    if re.search(r"<pageSetup\b", xml):
+        xml = _set_attrs(xml, "pageSetup", attrs)
+    fit = "1" if setup.get("fit_width", True) else "0"
+    if re.search(r"<pageSetUpPr\b", xml):
+        xml = _set_attrs(xml, "pageSetUpPr", {"fitToPage": fit})
+    elif re.search(r"<sheetPr\b[^>]*/>", xml):
+        xml = re.sub(r"<sheetPr\b([^>]*)/>", lambda m: f'<sheetPr{m.group(1)}><pageSetUpPr fitToPage="{fit}"/></sheetPr>', xml, count=1)
+    elif "</sheetPr>" in xml:
+        xml = xml.replace("</sheetPr>", f'<pageSetUpPr fitToPage="{fit}"/></sheetPr>', 1)
+    else:
+        xml = re.sub(r"(<worksheet\b[^>]*>)", lambda m: m.group(1) + f'<sheetPr><pageSetUpPr fitToPage="{fit}"/></sheetPr>', xml, count=1)
+    return xml
+
+
+def _sheet_part(files: dict[str, bytes], sheet: str) -> str:
+    wb = files["xl/workbook.xml"].decode("utf-8")
+    rid = None
+    for m in re.finditer(r"<sheet\s[^>]*?/>", wb):
+        name = re.search(r'\sname="([^"]*)"', m.group(0))
+        if name and html.unescape(name.group(1)) == sheet:
+            rid = re.search(r'\sr:id="([^"]*)"', m.group(0)).group(1)
+            break
+    if not rid:
+        raise ExcelError(f"La hoja «{sheet}» no existe en la plantilla.")
+    rels = files["xl/_rels/workbook.xml.rels"].decode("utf-8")
+    for m in re.finditer(r"<Relationship\s[^>]*?/>", rels):
+        if f'Id="{rid}"' in m.group(0):
+            target = re.search(r'Target="([^"]*)"', m.group(0)).group(1)
+            return target.lstrip("/") if target.startswith("/") else "xl/" + target
+    raise ExcelError(f"No se encontró la hoja «{sheet}» dentro del archivo.")
+
+
+def write_cells_xml(template: Path, out: Path, sheet: str, cells: dict[str, Any], page_setup: dict | None = None) -> None:
+    import zipfile
+    with zipfile.ZipFile(template) as zin:
+        infos = zin.infolist()
+        files = {i.filename: zin.read(i.filename) for i in infos}
+    part = _sheet_part(files, sheet)
+    xml = files[part].decode("utf-8")
+    xml = _set_cells_in_sheet(xml, cells)
+    xml = _page_setup_xml(xml, page_setup or {})
+    files[part] = xml.encode("utf-8")
+    wb = files["xl/workbook.xml"].decode("utf-8")
+    if re.search(r"<calcPr\b", wb):                      # recalcular las fórmulas al abrir
+        wb = _set_attrs(wb, "calcPr", {"fullCalcOnLoad": "1"})
+    else:
+        anchor = "</definedNames>" if "</definedNames>" in wb else "</sheets>"
+        wb = wb.replace(anchor, anchor + '<calcPr fullCalcOnLoad="1"/>', 1)
+    files["xl/workbook.xml"] = wb.encode("utf-8")
+    # La cadena de cálculo apunta a celdas con fórmula que ahora pueden tener un valor: Excel la reconstruye.
+    if "xl/calcChain.xml" in files:
+        infos = [i for i in infos if i.filename != "xl/calcChain.xml"]
+        rels = files["xl/_rels/workbook.xml.rels"].decode("utf-8")
+        files["xl/_rels/workbook.xml.rels"] = re.sub(r"<Relationship\s[^>]*?calcChain[^>]*?/>", "", rels).encode("utf-8")
+        ct = files["[Content_Types].xml"].decode("utf-8")
+        files["[Content_Types].xml"] = re.sub(r"<Override\s[^>]*?/xl/calcChain\.xml[^>]*?/>", "", ct).encode("utf-8")
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
+        for info in infos:
+            zout.writestr(info, files[info.filename], compress_type=zipfile.ZIP_DEFLATED)
+
+
+def render_layout(template: Path, mapping: Mapping, header: dict, lines: list[dict], page_setup: dict | None = None
+                  ) -> tuple[dict, dict[str, bytes]]:
+    """Diseño final (motor propio) de una plantilla de «Tipos de documento»: sirve para PDF e impresión sin Excel."""
+    from .xlsx_import import import_sheet
+    problems = validate(template, mapping)
+    if problems:
+        raise TemplateMappingError(problems)
+    wb = openpyxl.load_workbook(template, data_only=False)
+    template_values = {c.coordinate: c.value for row in wb[mapping.sheet].iter_rows() for c in row if c.value is not None}
+    wb.close()
+    cells = build_cells(mapping, header, lines, template_values)
+    layout, images, _ = import_sheet(template, mapping.sheet)
+    for coord, value in cells.items():
+        cell = layout["cells"].setdefault(coord, {})
+        cell.pop("f", None)
+        cell["v"] = "" if value is None else value
+    if page_setup:
+        page = layout.setdefault("page", {})
+        paper = str(page_setup.get("paper") or "").lower()
+        if paper in ("letter", "legal", "a4", "a5"):
+            page["paper"] = paper
+        page["orientation"] = "landscape" if page_setup.get("orientation") == "landscape" else "portrait"
+        m = float(page_setup.get("margins_cm", 1.5))
+        page["margins"] = {"t": m, "r": m, "b": m, "l": m}
+        page["fit_width"] = bool(page_setup.get("fit_width", True))
+        page["scale"] = max(10, min(400, int(page_setup.get("scale", 100))))
+    return layout, images
 
 
 def apply_page_setup(ws, setup: dict) -> None:

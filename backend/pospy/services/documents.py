@@ -19,8 +19,11 @@ from ..core.clock import iso, local_today, parse_date
 from ..core.errors import ConflictError, NotFoundError, ValidationError
 from ..core.money import from_cents, from_milli
 from ..core.query import like, paginate, slug
-from ..documents import com_excel, templates
+from ..documents import templates
 from ..documents.excel_safety import ExcelError, ensure_workbook, sha256, unsupported_parts
+from ..documents.layout_pdf import render_pdf
+from ..printing.gdi import print_layout
+from ..printing.printers import PrintError, system_printing_available
 from . import pricing
 from .scopes import InventoryScopes
 
@@ -477,11 +480,20 @@ class DocumentService:
         return header, lines
 
     def generate(self, actor: Actor, doc_id: int) -> Path:
+        """Excel del documento. Con plantilla de impresión: Excel generado con su diseño (imágenes incluidas).
+        Con la plantilla del tipo de documento: se rellena una copia (sin Microsoft Excel, conserva imágenes y macros)."""
         actor.require("documentos.ver")
         doc = self.get(actor, doc_id)
         t = self.get_type(actor, doc["type_id"])
+        if self._template(actor, doc_id):
+            result = self.print_templates.render_document(actor, doc_id, fmt="xlsx")
+            safe = re.sub(r"[^A-Za-z0-9_-]+", "_", doc["number"])
+            out = self.output_dir / t["code"] / f"{t['code']}-{safe}.xlsx"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(result["xlsx"])
+            return out
         if not t["has_template"]:
-            raise ValidationError(f"El tipo «{t['name']}» no tiene plantilla. Súbala en Gestión › Tipos de documento.")
+            raise ValidationError(f"El tipo «{t['name']}» no tiene plantilla. Cree una en Gestión › Plantillas de impresión.")
         template = self.templates_dir / t["template_file"]
         safe = re.sub(r"[^A-Za-z0-9_-]+", "_", doc["number"])
         out = self.output_dir / t["code"] / f"{t['code']}-{safe}{template.suffix}"
@@ -493,21 +505,44 @@ class DocumentService:
             record(conn, actor, "documento.generar", "document", doc_id, {"archivo": out.name})
         return out
 
+    def _template(self, actor: Actor, doc_id: int) -> dict | None:
+        return self.print_templates.document_template(actor, doc_id) if self.print_templates is not None else None
+
     def preview(self, actor: Actor, doc_id: int) -> dict:
+        tpl = self._template(actor, doc_id)
+        if tpl:   # plantilla de impresión (Gestión › Plantillas de impresión): la interfaz muestra el PDF real
+            return {"engine": "plantilla", "template": tpl["name"], "html": "", "printer": tpl["printer"],
+                    "direct_print": system_printing_available(), "page_setup": {}}
         path = self.generate(actor, doc_id)
         t = self.get_type(actor, self.get(actor, doc_id)["type_id"])
-        return {"html": templates.preview_html(path, templates.Mapping.from_dict(t["mapping"]).sheet),
+        return {"engine": "excel", "html": templates.preview_html(path, templates.Mapping.from_dict(t["mapping"]).sheet),
                 "file_name": path.name, "page_setup": t["page_setup"], "printer": t["printer"],
-                "direct_print": com_excel.com_available()}
+                "direct_print": system_printing_available()}
+
+    def _legacy_layout(self, actor: Actor, doc_id: int):
+        """Plantilla Excel del tipo de documento convertida al motor propio (PDF e impresión sin Excel)."""
+        doc = self.get(actor, doc_id)
+        t = self.get_type(actor, doc["type_id"])
+        if not t["has_template"]:
+            raise ValidationError(f"El tipo «{t['name']}» no tiene plantilla. Cree una en Gestión › Plantillas de impresión.")
+        header, lines = self._values(doc)
+        final, images = templates.render_layout(self.templates_dir / t["template_file"], templates.Mapping.from_dict(t["mapping"]),
+                                                header, lines, t["page_setup"])
+        return doc, t, final, images
 
     def pdf(self, actor: Actor, doc_id: int) -> Path:
-        # Plantilla de impresión nueva (motor propio, sin Excel) si el tipo tiene una predeterminada.
+        # Plantilla de impresión (motor propio, sin Excel) si el tipo tiene una predeterminada.
         if self.print_templates is not None:
             result = self.print_templates.render_document(actor, doc_id, required=False)
             if result:
                 return result["path"]
-        path = self.generate(actor, doc_id)
-        return com_excel.export_pdf(path, path.with_suffix(".pdf"))
+        doc, t, final, images = self._legacy_layout(actor, doc_id)
+        pdf, _ = render_pdf(final, images, f"{t['name']} {doc['number']}")
+        safe = re.sub(r"[^A-Za-z0-9_-]+", "_", doc["number"])
+        out = self.output_dir / t["code"] / f"{t['code']}-{safe}.pdf"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(pdf)
+        return out
 
     def print(self, actor: Actor, doc_id: int, printer: str | None = None, copies: int = 1) -> dict:
         actor.require("documentos.imprimir")
@@ -515,16 +550,20 @@ class DocumentService:
         if doc["status"] == "anulado":
             raise ValidationError("El documento está anulado.")
         t = self.get_type(actor, doc["type_id"])
-        target = (printer or "").strip() or t["printer"]
         copies = max(1, min(20, int(copies or 1)))
+        if self._template(actor, doc_id):       # plantilla de impresión: dibujo directo en la impresora de Windows
+            result = self.print_templates.render_document(actor, doc_id, fmt="print", printer=printer, copies=copies)
+            return {"printed": True, "printer": result["printer"], "copies": copies}
         error = None
+        target = ""
         try:
-            path = self.generate(actor, doc_id)
-            com_excel.print_workbook(path, target, copies, t["page_setup"])
-        except (ExcelError, ValidationError) as exc:
+            target = self.print_templates.resolve_printer(printer, t["printer"]) if self.print_templates else (printer or t["printer"])
+            _, _, final, images = self._legacy_layout(actor, doc_id)
+            print_layout(final, images, target, copies, f"{t['name']} {doc['number']}")
+        except (ExcelError, ValidationError, PrintError) as exc:
             error = exc.detail
         with self.db.tx() as conn:
-            self.printing.log(conn, actor, "documento", doc_id, f"{t['name']} {doc['number']}", target or "", "excel",
+            self.printing.log(conn, actor, "documento", doc_id, f"{t['name']} {doc['number']}", target or "", "directa",
                               copies, error)
             record(conn, actor, "documento.imprimir", "document", doc_id,
                    {"impresora": target, "copias": copies, "error": error, "reimpresion": bool(doc["prints"])})

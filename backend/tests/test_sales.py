@@ -24,10 +24,10 @@ def test_totals_with_discount_price_and_vat_included(ctx, admin, product):
 
 
 def test_manual_discount_requires_permission_and_respects_limit(ctx, admin, employee, product):
-    q = ctx.sales.quote(admin, [{"product_id": product["id"], "qty": "1", "discount_pct": "10"}])
-    assert q["lines"][0]["unit_price_cents"] == 1620000   # 18.000 − 10 %
+    q = ctx.sales.quote(admin, [{"product_id": product["id"], "qty": "1", "discount_pct": "20"}])
+    assert q["lines"][0]["unit_price_cents"] == 1440000   # 18.000 − 20 % (máximo predeterminado)
     with pytest.raises(ValidationError, match="máximo"):
-        ctx.sales.quote(admin, [{"product_id": product["id"], "qty": "1", "discount_pct": "11"}])
+        ctx.sales.quote(admin, [{"product_id": product["id"], "qty": "1", "discount_pct": "21"}])
     with pytest.raises(ValidationError, match="permiso"):
         ctx.sales.quote(employee, [{"product_id": product["id"], "qty": "1", "discount_pct": "5"}])
 

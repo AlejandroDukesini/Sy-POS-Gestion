@@ -60,7 +60,7 @@ function InventorySwitcher() {
 
 /** Versión mínima del esquema que necesita esta interfaz. Si el servidor en ejecución es anterior (se actualizó el
  *  programa sin reiniciar el servidor), se avisa en lugar de fallar con permisos o datos incompletos. */
-export const REQUIRED_SCHEMA = 13;
+export const REQUIRED_SCHEMA = 14;
 
 function ServerVersionNotice() {
   const health = useApi<{ schema: number; version: string }>('/health');

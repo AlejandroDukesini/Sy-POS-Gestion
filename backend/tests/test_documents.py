@@ -141,16 +141,21 @@ def test_sample_template_is_valid(ctx, admin, tmp_path):
 
 def test_print_without_printer_fails_clearly_and_is_logged(ctx, admin, quote_type, product, monkeypatch):
     doc = new_doc(ctx, admin, quote_type, product)
-    monkeypatch.setattr(com_excel, "com_available", lambda: False)
-    with pytest.raises(DomainError, match="Microsoft Excel"):
+    from pospy.printing.printers import PrintError
+
+    def missing(final, images, printer, copies=1, title=""):
+        raise PrintError(f"No se encontró la impresora «{printer}».")
+    monkeypatch.setattr("pospy.services.documents.print_layout", missing)
+    with pytest.raises(DomainError, match="DIGITALPOS"):          # ya no exige Microsoft Excel
         ctx.documents.print(admin, doc["id"])
     jobs = ctx.printing.jobs(admin, "documento", doc["id"])
-    assert jobs[0]["status"] == "error" and jobs[0]["printer"] == "DIGITALPOS"
+    assert jobs[0]["status"] == "error" and jobs[0]["printer"] == "DIGITALPOS" and jobs[0]["mode"] == "directa"
 
 
 def test_print_document_uses_configured_printer(ctx, admin, quote_type, product, monkeypatch):
     calls = []
-    monkeypatch.setattr(com_excel, "print_workbook", lambda path, printer, copies, setup: calls.append((printer, copies, setup)))
+    monkeypatch.setattr("pospy.services.documents.print_layout",
+                        lambda final, images, printer, copies=1, title="": calls.append((printer, copies, final["page"])))
     doc = new_doc(ctx, admin, quote_type, product)
     assert ctx.documents.print(admin, doc["id"])["printer"] == "DIGITALPOS"
     ctx.documents.print(admin, doc["id"], copies=2)   # reimpresión
@@ -170,8 +175,7 @@ def test_employee_needs_print_permission(ctx, admin, employee, quote_type, produ
         ctx.documents.save_type(limited, {"name": "X"})
 
 
-@pytest.mark.skipif(not com_excel.com_available(), reason="requiere Microsoft Excel")
-def test_template_with_chart_is_filled_with_excel_and_keeps_chart(ctx, admin, product, tmp_path):
+def test_template_with_chart_is_filled_without_excel_and_keeps_chart(ctx, admin, product, tmp_path):
     t = next(x for x in ctx.documents.types(admin) if x["code"] == "orden")
     ctx.documents.save_type(admin, {"name": "Orden", "prefix": "ORD-", "fields": [{"label": "Placa", "key": "placa"}],
                                     "page_setup": {}}, t["id"])

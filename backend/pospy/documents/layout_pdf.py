@@ -213,12 +213,45 @@ def paginate(geo: _Geometry, avail: float, repeat: tuple[int, int] | None, break
 
 
 # ------------------------------------------------------------------ dibujo
-class _Canvas:
+# El dibujo usa coordenadas del diseño (puntos, x a la derecha, y hacia abajo) y un «pintor»: PdfPainter escribe
+# el PDF; printing/gdi.py dibuja en una impresora de Windows con la MISMA geometría (vista previa = impresión).
+class PdfPainter:
     def __init__(self):
         self.ops: list[bytes] = []
 
     def add(self, op: bytes) -> None:
         self.ops.append(op)
+
+    def fill(self, x: float, y: float, w: float, h: float, rgb: tuple) -> None:
+        self.add(b"%.3f %.3f %.3f rg %.2f %.2f %.2f %.2f re f" % (*rgb, x, -(y + h), w, h))
+
+    def line(self, x1: float, y1: float, x2: float, y2: float, rgb: tuple, width: float, style: str = "") -> None:
+        dash = DASH.get(style, "[]").encode()
+        self.add(b"%.3f %.3f %.3f RG %.2f w %s 0 d %.2f %.2f m %.2f %.2f l S" % (*rgb, width, dash, x1, -y1, x2, -y2))
+
+    def end_lines(self) -> None:
+        self.add(b"[] 0 d")
+
+    def clip(self, x: float, y: float, w: float, h: float) -> None:
+        self.add(b"q %.2f %.2f %.2f %.2f re W n" % (x, -(y + h), w, h))
+
+    def unclip(self) -> None:
+        self.add(b"Q")
+
+    def text(self, font: dict, size: float, rgb: tuple, x: float, baseline: float, s: str) -> None:
+        self.add(b"BT %s %.2f Tf %.3f %.3f %.3f rg %.2f %.2f Td (%s) Tj ET" % (_font_ref(font), size, *rgb, x, -baseline, _escape(s)))
+
+    def text_rotated(self, font: dict, size: float, rgb: tuple, rot: int, x: float, y: float, s: str) -> None:
+        """Texto girado 90° (hacia arriba) o 270° (hacia abajo) con origen en (x, y)."""
+        matrix = b"0 1 -1 0 %.2f %.2f" % (x, -y) if rot == 90 else b"0 -1 1 0 %.2f %.2f" % (x, -y)
+        self.add(b"BT %s %.2f Tf %.3f %.3f %.3f rg %s Tm (%s) Tj ET" % (_font_ref(font), size, *rgb, matrix, _escape(s)))
+
+    def image(self, key: Any, x: float, y: float, w: float, h: float, fx: float, fy: float, fw: float, fh: float) -> None:
+        """Imagen completa en (fx, fy, fw, fh) recortada a la caja visible (x, y, w, h)."""
+        self.add(b"q %.2f %.2f %.2f %.2f re W n %.2f 0 0 %.2f %.2f %.2f cm /%s Do Q" % (x, -(y + h), w, h, fw, fh, fx, -(fy + fh), key))
+
+
+_Canvas = PdfPainter   # compatibilidad
 
 
 def _font_ref(font: dict) -> bytes:
@@ -241,8 +274,8 @@ def _wrap(text: str, size: float, width: float, bold: bool) -> list[str]:
     return lines
 
 
-def _draw_page(cv: _Canvas, geo: _Geometry, rows: list[int], layout: dict, image_names: dict[str, bytes]) -> None:
-    """Dibuja las filas en coordenadas del diseño (x a la derecha, y hacia abajo; se invierte con -y)."""
+def draw_page(cv, geo: _Geometry, rows: list[int], layout: dict, images: dict[str, Any]) -> None:
+    """Dibuja las filas de una página. images: archivo de imagen → clave del pintor."""
     styles = layout["styles"]
     cells = layout["cells"]
     ypos: dict[int, float] = {}
@@ -296,9 +329,7 @@ def _draw_page(cv: _Canvas, geo: _Geometry, rows: list[int], layout: dict, image
         for c in visible_cols:
             st = style_of(r, c)
             if st.get("fill") and (box := region(r, c)):
-                cr, cg, cb = _rgb(st["fill"], (1, 1, 1))
-                bx, by, bw, bh = box
-                cv.add(b"%.3f %.3f %.3f rg %.2f %.2f %.2f %.2f re f" % (cr, cg, cb, bx, -(by + bh), bw, bh))
+                cv.fill(*box, _rgb(st["fill"], (1, 1, 1)))
     # 2. texto
     for r in rows:
         if geo.rowh[r] <= 0:
@@ -328,15 +359,12 @@ def _draw_page(cv: _Canvas, geo: _Geometry, rows: list[int], layout: dict, image
                           or (side == "t" and r != m[0]) or (side == "b" and r != m[2])):
                     continue
                 seg = {"l": (x0, y0, x0, y1), "r": (x1, y0, x1, y1), "t": (x0, y0, x1, y0), "b": (x0, y1, x1, y1)}[side]
-                cr, cg, cb = _rgb(color)
-                dash = DASH.get(style, "[]").encode()
-                cv.add(b"%.3f %.3f %.3f RG %.2f w %s 0 d %.2f %.2f m %.2f %.2f l S" % (
-                    cr, cg, cb, BORDER_W.get(style, 0.5), dash, seg[0], -seg[1], seg[2], -seg[3]))
-    cv.add(b"[] 0 d")
+                cv.line(*seg, _rgb(color), BORDER_W.get(style, 0.5), style)
+    cv.end_lines()
     # 4. imágenes (sobre las celdas, como en Excel)
     for img in layout.get("images", []):
         row = img["row"] + 1
-        if row not in ypos or img["file"] not in image_names:
+        if row not in ypos or img["file"] not in images:
             continue
         col = img["col"] + 1
         if col < geo.c1 or col > geo.c2:
@@ -347,17 +375,17 @@ def _draw_page(cv: _Canvas, geo: _Geometry, rows: list[int], layout: dict, image
         crop = img.get("crop") or {}
         fw = w / max(0.01, 1 - crop.get("l", 0) - crop.get("r", 0))
         fh = h / max(0.01, 1 - crop.get("t", 0) - crop.get("b", 0))
-        ix, iy = x - crop.get("l", 0) * fw, y - crop.get("t", 0) * fh
-        name = image_names[img["file"]]
-        cv.add(b"q %.2f %.2f %.2f %.2f re W n %.2f 0 0 %.2f %.2f %.2f cm /%s Do Q" % (
-            x, -(y + h), w, h, fw, fh, ix, -(iy + fh), name))
+        cv.image(images[img["file"]], x, y, w, h, x - crop.get("l", 0) * fw, y - crop.get("t", 0) * fh, fw, fh)
+
+
+_draw_page = draw_page   # compatibilidad
 
 
 def _ref(r: int, c: int) -> str:
     return cell_ref(r, c)
 
 
-def _draw_text(cv: _Canvas, value: Any, st: dict, box: tuple[float, float, float, float],
+def _draw_text(cv, value: Any, st: dict, box: tuple[float, float, float, float],
                clip_box: tuple[float, float, float, float] | None = None) -> None:
     font = st.get("font") or {}
     size = float(font.get("size") or 11)
@@ -367,22 +395,19 @@ def _draw_text(cv: _Canvas, value: Any, st: dict, box: tuple[float, float, float
         return
     numeric = not isinstance(value, str)
     bx, by, bw, bh = box
-    cr, cg, cb = _rgb(font.get("color"))
+    rgb = _rgb(font.get("color"))
     rot = st.get("rot")
     if rot in (90, 270):                     # texto girado: una línea, centrada en la caja
         tw = text_width(text, size, bold)
         avail = max(1.0, bh - 2 * PAD)
         if st.get("shrink") and tw > avail:
             size, tw = max(3.0, size * avail / tw), avail
-        cx, cy, cw, ch = clip_box or box
-        cv.add(b"q %.2f %.2f %.2f %.2f re W n" % (cx, -(cy + ch), cw, ch))
+        cv.clip(*(clip_box or box))
         if rot == 90:
-            x, y = bx + bw / 2 + size * 0.35, by + bh / 2 + tw / 2
-            matrix = b"0 1 -1 0 %.2f %.2f" % (x, -y)
+            cv.text_rotated(font, size, rgb, 90, bx + bw / 2 + size * 0.35, by + bh / 2 + tw / 2, text)
         else:
-            x, y = bx + bw / 2 - size * 0.35, by + bh / 2 - tw / 2
-            matrix = b"0 -1 1 0 %.2f %.2f" % (x, -y)
-        cv.add(b"BT %s %.2f Tf %.3f %.3f %.3f rg %s Tm (%s) Tj ET Q" % (_font_ref(font), size, cr, cg, cb, matrix, _escape(text)))
+            cv.text_rotated(font, size, rgb, 270, bx + bw / 2 - size * 0.35, by + bh / 2 - tw / 2, text)
+        cv.unclip()
         return
     if st.get("shrink") and not st.get("wrap"):   # reducir hasta que quepa (como «Reducir hasta ajustar» de Excel)
         widest = max(text_width(ln, size, bold) for ln in text.split(chr(10)))
@@ -399,8 +424,7 @@ def _draw_text(cv: _Canvas, value: Any, st: dict, box: tuple[float, float, float
         top = by + (bh - block) / 2
     else:
         top = by + bh - PAD - block
-    cx, cy, cw, ch = clip_box or box
-    cv.add(b"q %.2f %.2f %.2f %.2f re W n" % (cx, -(cy + ch), cw, ch))
+    cv.clip(*(clip_box or box))
     for i, ln in enumerate(lines):
         tw = text_width(ln, size, bold)
         if h_align == "center":
@@ -410,18 +434,16 @@ def _draw_text(cv: _Canvas, value: Any, st: dict, box: tuple[float, float, float
         else:
             tx = bx + PAD
         baseline = top + leading * i + size * 0.93
-        cv.add(b"BT %s %.2f Tf %.3f %.3f %.3f rg %.2f %.2f Td (%s) Tj ET" % (
-            _font_ref(font), size, cr, cg, cb, tx, -baseline, _escape(ln)))
+        cv.text(font, size, rgb, tx, baseline, ln)
         if font.get("u"):
-            cv.add(b"%.3f %.3f %.3f RG %.2f w %.2f %.2f m %.2f %.2f l S" % (
-                cr, cg, cb, max(0.4, size / 18), tx, -(baseline + size * 0.12), tx + tw, -(baseline + size * 0.12)))
-    cv.add(b"Q")
+            uy = baseline + size * 0.12
+            cv.line(tx, uy, tx + tw, uy, rgb, max(0.4, size / 18))
+    cv.unclip()
 
 
-# ------------------------------------------------------------------ documento
-def render_pdf(layout: dict, images: dict[str, bytes] | None = None, title: str = "Documento") -> tuple[bytes, list[str]]:
-    """PDF del diseño ya completado. Devuelve (bytes, avisos)."""
-    images = images or {}
+# ------------------------------------------------------------------ planificación de páginas (PDF e impresión)
+def plan(layout: dict) -> dict:
+    """Papel, márgenes, escala y filas de cada página. Lo usan el PDF y la impresión directa."""
     notes: list[str] = []
     page = layout.get("page") or {}
     geo = _Geometry(layout)
@@ -451,6 +473,20 @@ def render_pdf(layout: dict, images: dict[str, bytes] | None = None, title: str 
     else:
         avail = max(20.0, (ph - mt - mb - header_h - footer_h) / scale)
     pages = paginate(geo, avail, repeat, breaks, int(page.get("repeat_until") or 0))
+    return {"geo": geo, "pw": pw, "ph": ph, "roll": roll, "ml": ml, "mr": mr, "mt": mt, "mb": mb, "scale": scale,
+            "header_h": header_h, "footer_h": footer_h, "pages": pages, "notes": notes, "page": page}
+
+
+# ------------------------------------------------------------------ documento
+def render_pdf(layout: dict, images: dict[str, bytes] | None = None, title: str = "Documento") -> tuple[bytes, list[str]]:
+    """PDF del diseño ya completado. Devuelve (bytes, avisos)."""
+    images = images or {}
+    pl = plan(layout)
+    notes = pl["notes"]
+    page, geo, pages = pl["page"], pl["geo"], pl["pages"]
+    pw, ph, roll, scale = pl["pw"], pl["ph"], pl["roll"], pl["scale"]
+    ml, mt, mb = pl["ml"], pl["mt"], pl["mb"]
+    header_h, footer_h = pl["header_h"], pl["footer_h"]
 
     # recursos de imagen
     objects: list[bytes] = []
@@ -499,9 +535,9 @@ def render_pdf(layout: dict, images: dict[str, bytes] | None = None, title: str 
     for n, rows in enumerate(pages, start=1):
         content_h = sum(geo.rowh[r] for r in rows) * scale
         page_h = (content_h + mt + mb + header_h + footer_h) if roll else ph
-        cv = _Canvas()
+        cv = PdfPainter()
         cv.add(b"q %.4f 0 0 %.4f %.2f %.2f cm" % (scale, scale, ml, page_h - mt - header_h))
-        _draw_page(cv, geo, rows, layout, xobjects)
+        draw_page(cv, geo, rows, layout, xobjects)
         cv.add(b"Q")
         for text, y in ((page.get("header"), page_h - mt - 8), (page.get("footer"), mb + 2)):
             if text:

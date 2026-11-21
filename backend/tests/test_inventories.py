@@ -276,7 +276,7 @@ def test_migration_from_group_inventories_preserves_everything(tmp_path, monkeyp
     c.close()
     monkeypatch.setattr(dbmod, "MIGRATIONS", full)
     db = Database(path)
-    assert db.migrate() == [13] and db.migrate() == []                         # idempotente
+    assert db.migrate() == [13, 14] and db.migrate() == []                         # idempotente
     c = sqlite3.connect(path)
     invs = c.execute("SELECT id, group_id, name, owner_id FROM inventories ORDER BY id").fetchall()
     assert [(g, n) for _, g, n, _ in invs] == [(1, "Armenia"), (None, "Inventario general")]

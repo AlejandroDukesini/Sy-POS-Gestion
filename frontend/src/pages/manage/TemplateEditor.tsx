@@ -602,7 +602,7 @@ function FieldsPanel({ catalog, onAssign, onTable }: { catalog: Catalog; onAssig
   };
   return (
     <div className="stack">
-      <p className="muted">Arrastre un campo hasta una celda, o elija una celda y pulse el campo.</p>
+      <p className="muted">Arrastre un campo hasta una celda, o elija una celda y pulse el campo. Todos son opcionales (por ejemplo «Válido hasta» o «Empleado responsable»): si un dato falta, la celda queda en blanco.</p>
       <div className="tpl-palette-group">
         <h3>Bloques</h3>
         <button type="button" className="tpl-field tpl-field-block" draggable onDragStart={(e) => drag(e, { kind: 'table' })} onClick={onTable}>

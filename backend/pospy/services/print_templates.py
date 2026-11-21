@@ -32,6 +32,7 @@ from ..documents.excel_safety import ExcelError
 from ..documents.layout import LayoutError, empty_layout, sanitize_layout
 from ..documents.layout_pdf import ImageError, _jpeg_info, _png_objects, page_count, render_pdf
 from ..documents.layout_xlsx import write_xlsx
+from ..printing.printers import PrintError, list_printers
 from .scopes import InventoryScopes
 
 KINDS = {"documento": "Documento comercial", "venta": "Venta", "recibo": "Recibo"}
@@ -376,6 +377,8 @@ class PrintTemplateService:
             name = name.strip()[:80]
             if not name:
                 raise ValidationError("Escriba el nombre.", {"name": "Nombre obligatorio."})
+            printer = (data.get("printer") if "printer" in data else row["printer"]) or ""
+            printer = printer.strip()[:200]
             active = int(bool(data["active"])) if "active" in data else row["active"]
             is_default = int(bool(data["is_default"])) if "is_default" in data else row["is_default"]
             if is_default and not active:
@@ -388,10 +391,11 @@ class PrintTemplateService:
                     raise ValidationError("Antes de usarla como predeterminada corrija: " + problems[0])
                 conn.execute("UPDATE print_templates SET is_default = 0 WHERE inventory_id IS ? AND kind = ? AND document_type_id IS ?"
                              " AND deleted_at IS NULL AND id <> ?", (row["inventory_id"], row["kind"], row["document_type_id"], row["id"]))
-            conn.execute("UPDATE print_templates SET name = ?, active = ?, is_default = ?, updated_by = ?, updated_at = ?,"
-                         " version = version + 1 WHERE id = ?", (name, active, is_default, actor.id, iso(), row["id"]))
+            conn.execute("UPDATE print_templates SET name = ?, active = ?, is_default = ?, printer = ?, updated_by = ?,"
+                         " updated_at = ?, version = version + 1 WHERE id = ?",
+                         (name, active, is_default, printer, actor.id, iso(), row["id"]))
             record(conn, actor, "plantilla.actualizar", "print_template", row["id"],
-                   {"nombre": name, "activa": active, "predeterminada": is_default})
+                   {"nombre": name, "activa": active, "predeterminada": is_default, "impresora": printer})
         return self.get(actor, public_id)
 
     def duplicate(self, actor: Actor, public_id: str, name: str = "") -> dict:
@@ -504,7 +508,11 @@ class PrintTemplateService:
         elif data.get("bindings") is not None:
             bindings = self._clean_bindings(data["bindings"])
         compiled, cbind, design_notes = self._design(layout, bindings)
-        if data.get("sale_id"):
+        if data.get("doc_id"):
+            with self.db.read() as conn:
+                _, header, real_lines = self._doc_data(conn, actor, int(data["doc_id"]))
+            demo = engine.DocData(header=header, lines=real_lines, printed_at=self._now_local())
+        elif data.get("sale_id"):
             # Vista previa con una venta REAL autorizada: solo lectura, no registra emisión ni toca la venta.
             if not (actor.can("ventas.historial") or actor.can("ventas.vender")):
                 actor.require("ventas.historial")
@@ -560,25 +568,17 @@ class PrintTemplateService:
                  "precio": _dec(r["unit_price_cents"]), "precio_lista": _dec(r["list_price_cents"]),
                  "descuento_linea": _dec(r["discount_cents"]), "iva_pct": Decimal(r["tax_rate_bp"]) / 100} for r in rows]
 
-    def render_document(self, actor: Actor, doc_id: int, public_id: str | None = None, *, required: bool = True,
-                        fmt: str = "pdf") -> dict | None:
-        """PDF de una cotización, orden u otro documento con su plantilla (la elegida o la predeterminada)."""
+    def _doc_data(self, conn, actor: Actor, doc_id: int):
+        """Datos REALES de un documento comercial (solo lectura). Los datos que falten quedan vacíos."""
         actor.require("documentos.ver")
-        with self.db.read() as conn:
-            doc = conn.execute("SELECT d.*, t.name AS type_name, u.full_name AS user_name FROM commercial_documents d"
-                               " JOIN document_types t ON t.id = d.type_id JOIN users u ON u.id = d.user_id WHERE d.id = ?",
-                               (doc_id,)).fetchone()
-            if not doc:
-                raise NotFoundError("Documento no encontrado.")
-            self.scopes.check(conn, actor, doc["inventory_id"], "Documento")
-            row = self._choose(conn, actor, doc["inventory_id"], "documento", doc["type_id"], public_id)
-            if not row:
-                if required:
-                    raise ValidationError(f"El tipo «{doc['type_name']}» no tiene una plantilla de impresión predeterminada.")
-                return None
-            v = self._version(conn, row["id"], row["current_version"])
-            lines = self._lines(conn.execute("SELECT * FROM commercial_document_lines WHERE document_id = ? ORDER BY line_no",
-                                             (doc_id,)).fetchall())
+        doc = conn.execute("SELECT d.*, t.name AS type_name, t.printer AS type_printer, u.full_name AS user_name"
+                           " FROM commercial_documents d JOIN document_types t ON t.id = d.type_id"
+                           " JOIN users u ON u.id = d.user_id WHERE d.id = ?", (doc_id,)).fetchone()
+        if not doc:
+            raise NotFoundError("Documento no encontrado.")
+        self.scopes.check(conn, actor, doc["inventory_id"], "Documento")
+        lines = self._lines(conn.execute("SELECT * FROM commercial_document_lines WHERE document_id = ? ORDER BY line_no",
+                                         (doc_id,)).fetchall())
         header = {**self._company(), "tipo_documento": doc["type_name"].upper(), "numero": doc["number"],
                   "fecha": parse_date(doc["doc_date"]), "valido_hasta": parse_date(doc["valid_until"]) if doc["valid_until"] else "",
                   "cliente_nombre": doc["customer_name"], "cliente_identificacion": doc["customer_identification"],
@@ -586,7 +586,47 @@ class PrintTemplateService:
                   "cliente_direccion": doc["customer_address"], "cliente_telefono": doc["customer_phone"],
                   "cliente_email": doc["customer_email"], "vendedor": doc["user_name"], "observaciones": doc["notes"],
                   "metodo_pago": "", "iva_incluido": _dec(doc["tax_cents"])}
-        return self._emit(actor, row, v, "documento", doc_id, f"{doc['type_name']}-{doc['number']}", header, lines, fmt)
+        return doc, header, lines
+
+    def document_template(self, actor: Actor, doc_id: int) -> dict | None:
+        """Plantilla de impresión predeterminada (activa) del documento, o None si el tipo no tiene."""
+        with self.db.read() as conn:
+            doc, _, _ = self._doc_data(conn, actor, doc_id)
+            row = self._choose(conn, actor, doc["inventory_id"], "documento", doc["type_id"], None)
+        if not row:
+            return None
+        return {"public_id": row["public_id"], "name": row["name"], "printer": self.resolve_printer(None, row["printer"],
+                                                                                                    doc["type_printer"])}
+
+    def document_preview(self, actor: Actor, doc_id: int, public_id: str | None = None) -> tuple[bytes, dict]:
+        """Vista previa en PDF del documento con su plantilla. Solo lectura: no registra emisión."""
+        with self.db.read() as conn:
+            doc, header, lines = self._doc_data(conn, actor, doc_id)
+            row = self._choose(conn, actor, doc["inventory_id"], "documento", doc["type_id"], public_id)
+            if not row:
+                raise ValidationError(f"El tipo «{doc['type_name']}» no tiene una plantilla de impresión predeterminada.")
+            v = self._version(conn, row["id"], row["current_version"])
+        compiled, cbind, _ = self._design(v["layout"], v["bindings"])
+        final, _ = engine.render(compiled, cbind, engine.DocData(header=header, lines=lines, printed_at=self._now_local()))
+        pdf, notes = render_pdf(final, self._images(row["public_id"], final), f"{doc['type_name']} {doc['number']}")
+        return pdf, {"pages": page_count(pdf), "notes": notes}
+
+    def render_document(self, actor: Actor, doc_id: int, public_id: str | None = None, *, required: bool = True,
+                        fmt: str = "pdf", printer: str | None = None, copies: int = 1) -> dict | None:
+        """PDF, Excel o impresión directa de una cotización, orden u otro documento con su plantilla."""
+        if fmt == "print":
+            actor.require("documentos.imprimir")
+        with self.db.read() as conn:
+            doc, header, lines = self._doc_data(conn, actor, doc_id)
+            row = self._choose(conn, actor, doc["inventory_id"], "documento", doc["type_id"], public_id)
+            if not row:
+                if required:
+                    raise ValidationError(f"El tipo «{doc['type_name']}» no tiene una plantilla de impresión predeterminada.")
+                return None
+            v = self._version(conn, row["id"], row["current_version"])
+        target = self.resolve_printer(printer, row["printer"], doc["type_printer"]) if fmt == "print" else None
+        return self._emit(actor, row, v, "documento", doc_id, f"{doc['type_name']}-{doc['number']}", header, lines, fmt,
+                          printer=target, copies=copies)
 
     def _sale_data(self, conn, actor: Actor, sale_id: int):
         """Datos REALES de una venta (solo lectura). Valida inventario y permisos de quien la consulta."""
@@ -612,7 +652,7 @@ class PrintTemplateService:
         return sale, header, lines
 
     def render_sale(self, actor: Actor, sale_id: int, public_id: str | None = None, kind: str = "venta",
-                    fmt: str = "pdf") -> dict:
+                    fmt: str = "pdf", printer: str | None = None, copies: int = 1) -> dict:
         if not (actor.can("ventas.historial") or actor.can("ventas.vender")):
             actor.require("ventas.historial")
         if kind not in ("venta", "recibo"):
@@ -623,10 +663,32 @@ class PrintTemplateService:
             if not row:
                 raise ValidationError(f"No hay una plantilla de {KINDS[kind].lower()} predeterminada para este inventario.")
             v = self._version(conn, row["id"], row["current_version"])
-        return self._emit(actor, row, v, "venta", sale_id, f"venta-{sale['number']}", header, lines, fmt)
+        target = self.resolve_printer(printer, row["printer"]) if fmt == "print" else None
+        return self._emit(actor, row, v, "venta", sale_id, f"venta-{sale['number']}", header, lines, fmt,
+                          printer=target, copies=copies)
+
+    def sale_template(self, actor: Actor, sale_id: int, kind: str) -> dict | None:
+        """Plantilla predeterminada (activa) de venta o recibo para el inventario de la venta, o None."""
+        with self.db.read() as conn:
+            sale, _, _ = self._sale_data(conn, actor, sale_id)
+            row = self._choose(conn, actor, sale["inventory_id"], kind, None, None)
+        if not row:
+            return None
+        return {"public_id": row["public_id"], "name": row["name"], "printer": self.resolve_printer(None, row["printer"])}
+
+    def resolve_printer(self, explicit: str | None, template_printer: str = "", type_printer: str = "") -> str:
+        """Impresora a usar: la elegida → la de la plantilla → la del tipo de documento → la predeterminada de
+        Configuración › Impresión → la predeterminada de Windows."""
+        for name in (explicit, template_printer, type_printer, self.settings.get("impresion").get("default_printer")):
+            if name and str(name).strip():
+                return str(name).strip()
+        info = list_printers()
+        if info.get("default"):
+            return info["default"]
+        raise PrintError("No hay impresora predeterminada. Elija una en Gestión › Configuración › Impresión.")
 
     def _emit(self, actor: Actor, row, v: dict, target_type: str, target_id: int, label: str, header: dict,
-              lines: list[dict], fmt: str = "pdf") -> dict:
+              lines: list[dict], fmt: str = "pdf", printer: str | None = None, copies: int = 1) -> dict:
         data = engine.DocData(header=header, lines=lines, printed_at=self._now_local())
         compiled, cbind, _ = self._design(v["layout"], v["bindings"])
         try:
@@ -656,8 +718,28 @@ class PrintTemplateService:
                  snapshot, actor.id, iso())).lastrowid
             record(conn, actor, "plantilla.emitir", target_type, target_id,
                    {"plantilla": row["name"], "version": v["number"], "paginas": pages, "salida": out_id})
-        return {"path": path, "output_id": out_id, "pages": pages, "notes": notes, "template": row["name"],
-                "version": v["number"], "totals": {k: str(x) for k, x in totals.items()}}
+        result = {"path": path, "output_id": out_id, "pages": pages, "notes": notes, "template": row["name"],
+                  "version": v["number"], "totals": {k: str(x) for k, x in totals.items()}}
+        if fmt == "print":
+            # Impresión directa en la impresora de Windows (sin Excel ni visor de PDF), con el mismo diseño del PDF.
+            from ..printing.gdi import print_layout
+            copies = max(1, min(20, int(copies or 1)))
+            error = None
+            try:
+                printed = print_layout(final, self._images(row["public_id"], final), printer or "", copies, label)
+                result.update(printed=True, printer=printed["printer"], copies=copies)
+            except PrintError as exc:
+                error = exc.detail
+            with self.db.tx() as conn:
+                conn.execute("INSERT INTO print_jobs(created_at, user_id, target_type, target_id, target_label, printer, mode,"
+                             " copies, status, error) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                             (iso(), actor.id, target_type, target_id, label[:80], printer or "", "directa", copies,
+                              "error" if error else "ok", error))
+                record(conn, actor, "plantilla.imprimir", target_type, target_id,
+                       {"plantilla": row["name"], "impresora": printer, "copias": copies, "error": error})
+            if error:
+                raise PrintError(error)
+        return result
 
     def outputs(self, actor: Actor, target_type: str, target_id: int) -> list[dict]:
         if target_type == "documento":

@@ -1,0 +1,101 @@
+IMPRESORAS CONFIGURABLES, DOCUMENTOS SIN MICROSOFT EXCEL, DATOS OPCIONALES Y DESCUENTO DE 20 %
+==============================================================================================
+
+Respuesta a las pruebas del usuario (2026-11-21):
+  1. «Venta: el descuento puede ser máximo del 20 %».
+  2. «La plantilla contiene imágenes o formas, macros: se necesita Microsoft Excel en el equipo del servidor
+     para generarla» → no debe pasar.
+  3. «Válido hasta», «Elaborado por»… son innecesarios en su caso y sin casilla se dañaba: debe ser flexible.
+  4. Poder configurar cualquier impresora (no solo la POS), con una predeterminada.
+
+
+1. DESCUENTO MANUAL MÁXIMO: 20 %
+--------------------------------
+- Valor de fábrica: 20 % (Gestión › Configuración › Ventas › «Descuento manual máximo (%)»). Sigue siendo
+  configurable de 0 a 100.
+- Migración 14: si la base tenía el valor de fábrica anterior (10 %), pasa a 20 %. Si el administrador había
+  elegido otro valor, se respeta.
+
+
+2. DOCUMENTOS SIN MICROSOFT EXCEL
+---------------------------------
+Causa: la pantalla de cotizaciones/órdenes usaba la plantilla de «Tipos de documento» y, si el Excel tenía
+imágenes, formas o macros, solo sabía rellenarla con Excel (COM).
+
+Ahora:
+- Si el tipo de documento tiene una plantilla de impresión predeterminada (Gestión › Plantillas de
+  impresión), TODO usa el motor propio: vista previa (el PDF real), Excel (generado con el diseño, con
+  imágenes), PDF e impresión directa.
+- Si solo tiene la plantilla Excel de «Tipos de documento»:
+  · Excel: se escriben solo las celdas dentro del XML de la hoja; dibujos, imágenes, gráficos, macros
+    (vbaProject.bin), estilos y fórmulas se copian intactos. Se quita calcChain.xml y se marca
+    «recalcular al abrir» (Excel lo reconstruye). Verificado abriendo el archivo con Excel real: sin
+    reparación, la imagen sigue, la macro sigue, =SUMA se recalcula, el papel y el ajuste al ancho aplican.
+  · PDF e impresión: la plantilla se convierte al motor propio (importación de la hoja + valores).
+- Ningún flujo usa ya Microsoft Excel. Las macros nunca se ejecutan.
+Archivos: documents/templates.py (write_cells_xml, render_layout), services/documents.py.
+
+
+3. DATOS OPCIONALES (FLEXIBILIDAD)
+----------------------------------
+- Plantillas de impresión (editor visual y cuadrícula): cualquier dato vacío o ausente se imprime en blanco
+  (o con el texto «Si no hay datos, mostrar»). Probado con TODOS los campos vacíos y ausentes: PDF y Excel
+  se generan igual.
+- Plantillas de «Tipos de documento»: ya no hay campos obligatorios (antes: Número, Cliente, Total y la fila
+  de productos). Solo se bloquea un marcador asignado que ya no está en su celda (evita un documento mal
+  impreso). Sin fila de productos, el documento se genera sin tabla.
+- Los editores lo indican: «Todos son opcionales: use solo los que necesite».
+Si aún ve un caso en que falte un dato y algo falle, anote el mensaje exacto: es un defecto a corregir.
+
+
+4. IMPRESORAS: CUALQUIERA, CON UNA PREDETERMINADA
+-------------------------------------------------
+Impresión directa desde el equipo servidor a CUALQUIER impresora instalada en Windows (térmica, láser,
+tinta, PDF…). printing/gdi.py dibuja la plantilla con GDI usando la misma geometría que el PDF (lo que se ve
+en la vista previa es lo que sale impreso): texto Arial (métricas de la Helvetica del PDF), líneas con su
+estilo, imágenes JPEG/PNG con GDI+ de Windows, recorte, varias páginas, copias. En hojas se pide al
+controlador el papel y la orientación de la plantilla; en rollos se usa el papel del controlador y se divide si
+el contenido es más alto. Sin dependencias nuevas (pywin32 ya estaba).
+
+Dónde se elige:
+- Gestión › Impresión › «Impresora predeterminada (documentos y plantillas)»: lista de impresoras de Windows
+  (vacío = la predeterminada de Windows).
+- Cada plantilla: Gestión › Plantillas de impresión › botón de impresora (columna «Impresora»).
+- Al imprimir: selector «Impresora» en el documento y en «PDF con plantilla».
+Prioridad: la elegida al imprimir → la de la plantilla → la del tipo de documento → la predeterminada de
+Configuración → la predeterminada de Windows.
+
+Comprobante del POS: nuevo «Modo de impresión de comprobantes» = «Plantilla de recibo en cualquier impresora»
+(usa la plantilla de recibo predeterminada; si no hay, la de venta). Los modos «Térmica directa (ESC/POS)» y
+«Diálogo del navegador» siguen disponibles.
+
+Cada impresión queda en «Últimas impresiones» (modo «directa», impresora, copias, resultado o error) y en la
+actividad. Errores claros: impresora inexistente, desconectada, etc.
+
+Rutas nuevas: POST /api/sales/{id}/template-print, POST /api/documents/{id}/template-print,
+GET /api/documents/{id}/template-preview (solo lectura), GET /api/sales/{id}/template-info.
+Migración 14: print_templates.printer; print_jobs admite el modo «directa» (tabla reconstruida sin perder
+registros); descuento 20 %. La interfaz exige el esquema 14 (aviso si el servidor es viejo).
+
+
+5. PRUEBAS
+----------
+backend/tests/test_direct_print.py (11): datos ausentes nunca rompen; descuento 20/21 %; migración respeta
+valores elegidos; impresión de venta con prioridad de impresoras y registro; error de impresión registrado;
+comprobante en modo plantilla; documentos con el motor propio (vista previa sin emisión, Excel, PDF,
+impresión); Excel antiguo con imagen rellenado sin Excel; .xlsm real con dibujo y macros; plantilla antigua
+sin campos «obligatorios»; impresión GDI real en «Microsoft Print to PDF».
+tests/test_documents.py actualizado (la plantilla con gráfico se rellena sin Excel).
+frontend/e2e/printers-documents.mjs (navegador real): descuento, lista de impresoras de Windows y
+predeterminada, impresora por plantilla, vista previa del documento con la plantilla, Excel/PDF, impresora
+inexistente registrada, ORDEN .xlsm real sin Excel (imagen y macros conservadas, PDF).
+Regresión: pytest completo, vitest (96), tsc, eslint, E2E canvas-editor, print-templates y smoke: todo correcto.
+
+
+6. LIMITACIONES
+---------------
+- La impresión directa usa las impresoras del EQUIPO SERVIDOR (donde corre POS-PY). Desde otro equipo de la
+  red se sigue pudiendo descargar el PDF.
+- «Microsoft Print to PDF»/«XPS» como impresora abren en el servidor la ventana para guardar el archivo.
+- En plantillas antiguas, las celdas con fórmula que no son datos del POS muestran en el PDF el valor que
+  tenían guardado (en el Excel se recalculan al abrir). Para totales use los datos del POS.

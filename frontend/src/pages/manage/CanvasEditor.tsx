@@ -344,7 +344,7 @@ export function CanvasEditor({ tpl, reload }: { tpl: any; reload: () => void }) 
             )}
             {left === 'datos' && (
               <div className="cv-palette">
-                <p className="muted">Datos reales del POS (se llenan al imprimir).</p>
+                <p className="muted">Datos reales del POS (se llenan al imprimir). Todos son opcionales: use solo los que necesite; si un dato falta, queda en blanco.</p>
                 {catalog.fields.map((g) => (
                   <div key={g.group}>
                     <h3>{g.group}</h3>

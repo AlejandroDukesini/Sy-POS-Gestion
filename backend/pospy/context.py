@@ -62,6 +62,7 @@ class AppContext:
         self.documents = DocumentService(self.db, self.settings, config, self.printing, self.scopes)
         self.print_templates = PrintTemplateService(self.db, self.settings, config, self.scopes)
         self.documents.print_templates = self.print_templates
+        self.printing.print_templates = self.print_templates
         self.receivables = OpenItems(self.db, self.settings, AR)
         self.payables = OpenItems(self.db, self.settings, AP)
         self.finance = FinanceService(self.db, self.settings)

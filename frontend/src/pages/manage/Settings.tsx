@@ -4,6 +4,7 @@ import { ApiError, del, get, post, put, upload } from '../../api/client';
 import { Button } from '../../components/ui/Button';
 import { ConfirmDialog } from '../../components/ui/Dialog';
 import { Alert, ErrorAlert, Loading } from '../../components/ui/Feedback';
+import { PrinterSelect } from '../../components/PrinterSelect';
 import { Checkbox, Field, NumberField, SelectField, TextField } from '../../components/ui/Form';
 import { Card } from '../../components/ui/Layout';
 import { DataTable } from '../../components/ui/Table';
@@ -13,7 +14,8 @@ import { useApi } from '../../lib/hooks';
 import { ManageBack } from './ManageRoutes';
 
 const CHOICE_LABELS: Record<string, string> = {
-  escpos: 'Directa a la impresora (ESC/POS)', navegador: 'Diálogo del navegador', '32': '58 mm (32 caracteres)',
+  escpos: 'Térmica directa (ESC/POS, formato clásico)', navegador: 'Diálogo del navegador',
+  plantilla: 'Plantilla de recibo en cualquier impresora (sin diálogo)', '32': '58 mm (32 caracteres)',
   '42': '76 mm (42 caracteres)', '48': '80 mm (48 caracteres)',
 };
 
@@ -71,6 +73,13 @@ export function SettingsSection({ section, title, exclude = [], saveLabel = 'Gua
                   {({ id }) => <input id={id} type="color" className="input" style={{ padding: 4 }} value={values[key]} onChange={(e) => set(e.target.value)} />}
                 </Field>
               );
+            }
+            if (key === 'default_printer') {
+              return <PrinterSelect key={key} label="Impresora predeterminada (documentos y plantillas)" value={values[key] ?? ''} onChange={set}
+                error={fe[key]} emptyLabel="La predeterminada de Windows" hint="Se usa cuando la plantilla o el tipo de documento no indica otra." />;
+            }
+            if (key === 'receipt_printer') {
+              return <PrinterSelect key={key} label="Impresora de comprobantes ESC/POS (modo térmica directa)" value={values[key] ?? ''} onChange={set} error={fe[key]} />;
             }
             return <TextField key={key} label={f.label} value={values[key] ?? ''} onChange={set} error={fe[key]} maxLength={f.max_len} />;
           })}
@@ -156,7 +165,7 @@ export function PrintingPage() {
   };
   return (
     <div className="stack">
-      <ManageBack title="Impresión" description="Comprobantes de venta en la impresora térmica DIGITALPOS (u otra compatible ESC/POS)." />
+      <ManageBack title="Impresión" description="Cualquier impresora instalada en Windows (térmica, láser, tinta). Elija una predeterminada; cada plantilla puede usar otra." />
       <Card title="Impresoras de este equipo">
         <div className="card-body stack">
           {printers.loading ? <Loading /> : printers.data?.available ? (
@@ -164,22 +173,18 @@ export function PrintingPage() {
               <ul>{printers.data.printers.map((p: any) => (
                 <li key={p.name}><strong>{p.name}</strong> · {p.driver} · {p.port}{p.name === printers.data.default ? ' (predeterminada)' : ''}</li>
               ))}</ul>
-              {!printers.data.printers.some((p: any) => /digitalpos/i.test(p.name)) && (
-                <Alert kind="warning" title="DIGITALPOS no está instalada">
-                  Instale el controlador de la impresora en Windows y escriba su nombre exacto abajo. Mientras tanto puede usar el modo
-                  «Diálogo del navegador».
-                </Alert>
-              )}
+
             </>
           ) : <Alert kind="info">{printers.data?.reason}</Alert>}
           <ErrorAlert error={error} title="La prueba falló" />
           <div><Button busy={busy} icon={<Printer size={20} />} onClick={test}>Imprimir página de prueba</Button></div>
         </div>
       </Card>
-      <SettingsSection section="impresion" title="Comprobante de venta" />
+      <SettingsSection section="impresion" title="Impresoras y comprobante de venta" />
       <Alert kind="info">
-        La impresora, el papel, la orientación, los márgenes y la escala de cotizaciones y órdenes se configuran en cada tipo de
-        documento (Gestión › Tipos de documento).
+        Prioridad de impresora: la elegida al imprimir → la de la plantilla (Gestión › Plantillas de impresión) → la del tipo de
+        documento → la predeterminada de arriba → la predeterminada de Windows. Las plantillas se dibujan directamente en la impresora:
+        no se necesita Microsoft Excel ni un visor de PDF.
       </Alert>
       <Card title="Últimas impresiones">
         <DataTable caption="Trabajos de impresión" rows={jobs.data ?? []} rowKey={(j: any) => j.id} columns={[

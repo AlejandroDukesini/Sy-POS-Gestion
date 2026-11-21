@@ -118,6 +118,17 @@ class PrintingService:
         sale = self.sales.get(actor, sale_id)
         conf = self.settings.get("impresion")
         copies = max(1, min(5, int(copies or conf["receipt_copies"])))
+        if conf["receipt_mode"] == "plantilla":
+            # Comprobante con la plantilla de recibo (o de venta) en cualquier impresora de Windows.
+            templates = getattr(self, "print_templates", None)
+            for kind in ("recibo", "venta"):
+                tpl = templates.sale_template(actor, sale_id, kind) if templates else None
+                if tpl:
+                    result = templates.render_sale(actor, sale_id, tpl["public_id"], kind, fmt="print", copies=copies)
+                    return {"mode": "plantilla", "printed": True, "printer": result["printer"], "copies": copies,
+                            "template": tpl["name"]}
+            raise PrintError("No hay una plantilla de recibo ni de venta predeterminada y activa para este inventario. "
+                             "Créela en Gestión › Plantillas de impresión o cambie el modo en Configuración › Impresión.")
         if conf["receipt_mode"] == "navegador":
             with self.db.tx() as conn:
                 self.log(conn, actor, "venta", sale_id, sale["number"], "navegador", "navegador", copies)

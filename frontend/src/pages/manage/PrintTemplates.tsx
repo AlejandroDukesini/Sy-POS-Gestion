@@ -1,8 +1,9 @@
-import { Copy, FileSpreadsheet, LayoutTemplate, Pencil, Plus, Star, Trash2, Upload } from 'lucide-react';
+import { Copy, FileSpreadsheet, LayoutTemplate, Pencil, Plus, Printer, Star, Trash2, Upload } from 'lucide-react';
 import { useState } from 'react';
 import { Route, Routes, useNavigate } from 'react-router-dom';
 import { ApiError, del, post, upload } from '../../api/client';
 import { Button } from '../../components/ui/Button';
+import { PrinterSelect } from '../../components/PrinterSelect';
 import { ConfirmDialog, Dialog } from '../../components/ui/Dialog';
 import { Alert, Badge, EmptyState, ErrorAlert, ErrorState, Loading } from '../../components/ui/Feedback';
 import { Field, SelectField, TextField } from '../../components/ui/Form';
@@ -18,7 +19,7 @@ import { TemplateEditor } from './TemplateEditor';
 
 export interface TemplateRow {
   public_id: string; name: string; kind: 'documento' | 'venta' | 'recibo'; source: 'excel' | 'editor'; active: number;
-  is_default: number; current_version: number; document_type: { id: number; code: string; name: string } | null;
+  is_default: number; current_version: number; printer?: string; document_type: { id: number; code: string; name: string } | null;
   inventory: { key: string; name: string }; outputs: number; updated_at: string; has_original: boolean; original_name?: string;
 }
 
@@ -45,6 +46,7 @@ function TemplateList() {
   const [importing, setImporting] = useState(false);
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<TemplateRow | null>(null);
+  const [choosingPrinter, setChoosingPrinter] = useState<TemplateRow | null>(null);
   const [busy, setBusy] = useState(false);
 
   const act = async (fn: () => Promise<unknown>, ok: string) => {
@@ -86,6 +88,7 @@ function TemplateList() {
                     {t.active ? <Badge kind="success">Activa</Badge> : <Badge kind="warning">Borrador</Badge>}
                     {t.is_default ? <Badge kind="info">Predeterminada</Badge> : null}
                   </span>) },
+                { key: 'p', header: 'Impresora', render: (t) => t.printer || <span className="muted">Predeterminada</span> },
                 { key: 'v', header: 'Versión', numeric: true, render: (t) => t.current_version },
                 { key: 'e', header: 'Emitidos', numeric: true, render: (t) => t.outputs },
                 { key: 'u', header: 'Actualizada', render: (t) => dateTime(t.updated_at) },
@@ -98,6 +101,8 @@ function TemplateList() {
                       <Button size="sm" variant="ghost" iconOnly icon={<Star size={18} />} disabled={busy}
                         onClick={() => act(() => api(`/print-templates/${t.public_id}`, { method: 'PATCH', body: { is_default: true } }),
                           'Ahora es la plantilla predeterminada')}>Usar {t.name} como predeterminada</Button>) : null}
+                    <Button size="sm" variant="ghost" iconOnly icon={<Printer size={18} />} disabled={busy}
+                      onClick={() => setChoosingPrinter(t)}>Impresora de {t.name}</Button>
                     <Button size="sm" variant="ghost" iconOnly icon={<Trash2 size={18} />} disabled={busy}
                       onClick={() => setDeleting(t)}>Eliminar {t.name}</Button>
                   </span>) },
@@ -106,11 +111,26 @@ function TemplateList() {
       </Card>
       {importing && <ImportWizard onClose={() => setImporting(false)} onDone={(id) => navigate(id)} />}
       {creating && <CreateDialog onClose={() => setCreating(false)} onDone={(id) => navigate(id)} />}
+      {choosingPrinter && <PrinterDialog template={choosingPrinter} onClose={() => setChoosingPrinter(null)}
+        onSave={(printer) => { const t = choosingPrinter; setChoosingPrinter(null);
+          void act(() => api(`/print-templates/${t.public_id}`, { method: 'PATCH', body: { printer } }), 'Impresora de la plantilla guardada'); }} />}
       <ConfirmDialog open={Boolean(deleting)} danger title="Eliminar plantilla" confirmLabel="Eliminar" busy={busy}
         message={`¿Eliminar «${deleting?.name}»? Dejará de estar disponible para imprimir. Los documentos ya emitidos con ella se conservan.`}
         onClose={() => setDeleting(null)}
         onConfirm={() => { const t = deleting!; setDeleting(null); void act(() => del(`/print-templates/${t.public_id}`), 'Plantilla eliminada'); }} />
     </div>
+  );
+}
+
+function PrinterDialog({ template, onClose, onSave }: { template: TemplateRow; onClose: () => void; onSave: (printer: string) => void }) {
+  const [printer, setPrinter] = useState(template.printer ?? '');
+  return (
+    <Dialog open title={`Impresora de «${template.name}»`} onClose={onClose} footer={<>
+      <Button onClick={onClose}>Cancelar</Button><Button variant="primary" onClick={() => onSave(printer)}>Guardar</Button></>}>
+      <PrinterSelect label="Impresora" value={printer} onChange={setPrinter} emptyLabel="La predeterminada (Configuración › Impresión)"
+        hint="Cualquier impresora instalada en Windows en el equipo servidor: térmica, láser o de tinta." />
+      <p className="muted">Al imprimir con esta plantilla se usa esta impresora, salvo que se elija otra en ese momento.</p>
+    </Dialog>
   );
 }
 

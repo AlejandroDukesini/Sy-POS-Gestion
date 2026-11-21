@@ -12,6 +12,7 @@ import { useAuth } from '../../context/Auth';
 import { useToast } from '../../context/Toast';
 import { date, dateTime, money, toApiNumber } from '../../lib/format';
 import { useApi, useDebounced, useOnline } from '../../lib/hooks';
+import { PrinterSelect } from '../../components/PrinterSelect';
 import { TemplatePdfButton } from './TemplatePdf';
 import { addToCart, CartTable, CustomerPicker, printInBrowser, ProductSearch, StockWarnings, TotalsBox, useQuote, type CartLine, type Customer } from './Cart';
 
@@ -210,6 +211,8 @@ function DocumentDetail() {
   const [busy, setBusy] = useState('');
   const [voiding, setVoiding] = useState(false);
   const [printError, setPrintError] = useState<ApiError | null>(null);
+  const [printer, setPrinter] = useState('');
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const d = doc.data;
 
   useEffect(() => {
@@ -218,13 +221,27 @@ function DocumentDetail() {
     get(`/documents/${id}/preview`).then(setPreview).catch((err) => { setPreview(null); setPreviewError(err); });
   }, [d, id]);
 
+  // Plantilla de impresión: la vista previa es el PDF real (mismo dibujo que la impresión), sin registrar emisión.
+  useEffect(() => {
+    if (preview?.engine !== 'plantilla') { setPdfUrl(null); return; }
+    let alive = true;
+    let current: string | null = null;
+    get<Blob>(`/documents/${id}/template-preview`)
+      .then((blob) => { if (!alive) return; current = URL.createObjectURL(blob); setPdfUrl(current); })
+      .catch((err) => { if (alive) setPreviewError(err as ApiError); });
+    return () => { alive = false; if (current) URL.revokeObjectURL(current); };
+  }, [preview, id, d?.version]);
+
   const print = async () => {
     setBusy('print');
     setPrintError(null);
     try {
       if (preview?.direct_print) {
-        const r = await post(`/documents/${id}/print`, {});
+        const r = await post(`/documents/${id}/print`, { printer: printer || null });
         notify('success', 'Documento enviado a imprimir', `Impresora: ${r.printer}`);
+      } else if (preview?.engine === 'plantilla' && pdfUrl) {
+        document.querySelector<HTMLIFrameElement>('iframe.doc-preview')?.contentWindow?.print();
+        await post('/printing/browser-log', { target_type: 'documento', target_id: Number(id), label: `${d.type_name} ${d.number}` });
       } else {
         printInBrowser(`${d.type_name} ${d.number}`, preview?.html ?? '',
           `table{border-collapse:collapse;font-size:12px} td{padding:2px 4px} @page{size:${preview?.page_setup?.paper ?? 'letter'} ${preview?.page_setup?.orientation ?? 'portrait'};margin:${preview?.page_setup?.margins_cm ?? 1.5}cm}`);
@@ -275,7 +292,7 @@ function DocumentDetail() {
               disabled={!preview}>{d.prints.length ? 'Reimprimir' : 'Imprimir'}</Button>
           )}
           <Button variant="outline" busy={busy === 'file'} icon={<Download size={20} />} onClick={() => fetchFile('file')}>Excel</Button>
-          {preview?.direct_print && <Button variant="outline" busy={busy === 'pdf'} icon={<FileDown size={20} />} onClick={() => fetchFile('pdf')}>PDF</Button>}
+          <Button variant="outline" busy={busy === 'pdf'} icon={<FileDown size={20} />} onClick={() => fetchFile('pdf')}>PDF</Button>
           <TemplatePdfButton target="documento" id={d.id} kind="documento" documentTypeId={d.type_id} />
           {can('documentos.crear') && active && (
             <Button variant="outline" icon={<Pencil size={20} />} onClick={() => navigate(`/vender/documentos/${id}/editar`)}>Editar</Button>
@@ -289,10 +306,16 @@ function DocumentDetail() {
         </div>
         {preview && (
           <div className="card-body" style={{ paddingTop: 0 }}>
+            {preview.direct_print && can('documentos.imprimir') && active && (
+              <div style={{ maxWidth: 420 }}>
+                <PrinterSelect label="Impresora" value={printer} onChange={setPrinter}
+                  emptyLabel={`Predeterminada${preview.printer ? ` (${preview.printer})` : ''}`} />
+              </div>
+            )}
             <p className="muted">
               {preview.direct_print
-                ? `Se imprime directamente en «${preview.printer || 'la impresora predeterminada del tipo'}» con la configuración de página del tipo de documento.`
-                : 'Este equipo no tiene Microsoft Excel para imprimir la plantilla directamente: se usará el diálogo de impresión del navegador.'}
+                ? `Se imprime directamente en la impresora elegida${preview.engine === 'plantilla' ? ` con la plantilla «${preview.template}»` : ''}. No se necesita Microsoft Excel.`
+                : 'La impresión directa no está disponible en este servidor: se usará el diálogo de impresión del navegador.'}
             </p>
           </div>
         )}
@@ -302,8 +325,14 @@ function DocumentDetail() {
         <div className="card-body">
           {previewError ? <Alert kind="warning" title="Vista previa no disponible">{previewError.message}</Alert>
             : !preview ? <Loading label="Generando con la plantilla…" />
-            : <div className="preview-sheet" dangerouslySetInnerHTML={{ __html: preview.html }} />}
-          <p className="muted" style={{ marginTop: 8 }}>La vista previa muestra el contenido; el archivo Excel conserva el formato exacto de la plantilla.</p>
+            : preview.engine === 'plantilla'
+              ? (pdfUrl ? <iframe className="tpl-preview doc-preview" title="Vista previa del documento" src={pdfUrl} /> : <Loading label="Generando con la plantilla…" />)
+              : <div className="preview-sheet" dangerouslySetInnerHTML={{ __html: preview.html }} />}
+          <p className="muted" style={{ marginTop: 8 }}>
+            {preview?.engine === 'plantilla'
+              ? `Vista previa con la plantilla «${preview.template}»: es exactamente lo que se imprime. Los datos que falten quedan en blanco.`
+              : 'La vista previa muestra el contenido; el archivo Excel conserva el formato exacto de la plantilla.'}
+          </p>
         </div>
       </Card>
       <div className="grid-2">

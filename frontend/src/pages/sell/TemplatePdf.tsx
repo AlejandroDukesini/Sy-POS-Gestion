@@ -1,10 +1,13 @@
-import { FileText } from 'lucide-react';
+import { FileText, Printer } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { ApiError, qs } from '../../api/client';
+import { ApiError, post, qs } from '../../api/client';
+import { PrinterSelect } from '../../components/PrinterSelect';
 import { Button } from '../../components/ui/Button';
 import { Dialog } from '../../components/ui/Dialog';
 import { ErrorAlert, Loading } from '../../components/ui/Feedback';
 import { SelectField } from '../../components/ui/Form';
+import { useAuth } from '../../context/Auth';
+import { useToast } from '../../context/Toast';
 import { useApi } from '../../lib/hooks';
 
 /**
@@ -35,6 +38,25 @@ function PdfDialog({ target, id, kind, templates, onClose }: {
   const [url, setUrl] = useState<string | null>(null);
   const [pages, setPages] = useState<string>('');
   const [error, setError] = useState<ApiError | null>(null);
+  const { can } = useAuth();
+  const { notify } = useToast();
+  const printers = useApi<any>(can('documentos.imprimir') || can('ventas.vender') ? '/printing/printers' : null);
+  const chosen = templates.find((t) => t.public_id === template);
+  const [printer, setPrinter] = useState('');
+  const [printing, setPrinting] = useState(false);
+  const printDirect = async () => {
+    setPrinting(true);
+    setError(null);
+    try {
+      const path = target === 'documento' ? `/documents/${id}/template-print` : `/sales/${id}/template-print`;
+      const r = await post(path, { template, printer: printer || null, kind: target === 'venta' ? kind : 'venta' });
+      notify('success', 'Enviado a imprimir', `Impresora: ${r.printer}`);
+    } catch (err) {
+      setError(err as ApiError);
+    } finally {
+      setPrinting(false);
+    }
+  };
   useEffect(() => {
     let alive = true;
     let current: string | null = null;
@@ -57,6 +79,7 @@ function PdfDialog({ target, id, kind, templates, onClose }: {
   }, [target, id, kind, template]);
   return (
     <Dialog open size="xl" title="PDF con plantilla" onClose={onClose} footer={<>
+      {printers.data?.available && <Button variant="primary" busy={printing} icon={<Printer size={20} />} onClick={printDirect}>Imprimir</Button>}
       {url && <a className="btn btn-outline" href={url} download={`${target}-${id}.pdf`}>Descargar PDF</a>}
       <Button onClick={onClose}>Cerrar</Button>
     </>}>
@@ -67,9 +90,15 @@ function PdfDialog({ target, id, kind, templates, onClose }: {
               options={templates.map((t) => ({ value: t.public_id, label: `${t.name}${t.is_default ? ' (predeterminada)' : ''}` }))} />
           </div>
         )}
+        {printers.data?.available && (
+          <div style={{ minWidth: 260 }}>
+            <PrinterSelect label="Impresora" value={printer} onChange={setPrinter}
+              emptyLabel={`Predeterminada${chosen?.printer ? ` (${chosen.printer})` : ''}`} />
+          </div>
+        )}
         <p className="muted grow">
           Datos reales de la operación y hora de esta generación{pages ? ` · ${pages} página(s)` : ''}. Queda guardado en el historial
-          con la versión de la plantilla. Imprímalo desde el visor del PDF.
+          con la versión de la plantilla. «Imprimir» lo envía directo a la impresora elegida (sin Excel).
         </p>
       </div>
       <ErrorAlert error={error} />

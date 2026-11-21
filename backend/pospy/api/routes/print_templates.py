@@ -45,6 +45,14 @@ class TemplateMeta(Strict):
     name: str | None = Field(default=None, max_length=80)
     active: bool | None = None
     is_default: bool | None = None
+    printer: str | None = Field(default=None, max_length=200)   # '' = la predeterminada
+
+
+class DirectPrint(Strict):
+    kind: Literal["venta", "recibo"] = "venta"
+    template: str | None = Field(default=None, max_length=40)
+    printer: str | None = Field(default=None, max_length=200)
+    copies: int = Field(default=1, ge=1, le=20)
 
 
 class TemplatePreview(Strict):
@@ -52,6 +60,7 @@ class TemplatePreview(Strict):
     bindings: dict[str, Any] | None = None
     lines: int = Field(default=3, ge=0, le=200)
     sale_id: int | None = None      # vista previa con una venta real (solo lectura)
+    doc_id: int | None = None       # vista previa con un documento real (solo lectura)
 
 
 class Duplicate(Strict):
@@ -205,3 +214,32 @@ def company_logo(public_id: str, current: Actor = Depends(actor), app: AppContex
 def template_xlsx(public_id: str, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
     data, name = app.print_templates.template_xlsx(current, public_id)
     return _xlsx(data, name)
+
+
+@router.get("/documents/{doc_id}/template-preview")
+def document_preview(doc_id: int, template: str | None = None, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    """PDF del documento con su plantilla, solo para ver (no registra emisión)."""
+    pdf, meta = app.print_templates.document_preview(current, doc_id, template)
+    return _pdf(pdf, f"documento-{doc_id}.pdf", meta)
+
+
+@router.get("/sales/{sale_id}/template-info")
+def sale_template_info(sale_id: int, kind: Literal["venta", "recibo"] = "venta", current: Actor = Depends(actor),
+                       app: AppContext = Depends(ctx)):
+    return {"template": app.print_templates.sale_template(current, sale_id, kind)}
+
+
+@router.post("/sales/{sale_id}/template-print")
+def sale_print(sale_id: int, body: DirectPrint, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    """Imprime la venta con la plantilla directamente en una impresora de Windows del equipo servidor."""
+    result = app.print_templates.render_sale(current, sale_id, body.template, body.kind, fmt="print", printer=body.printer,
+                                             copies=body.copies)
+    return {"printed": True, "printer": result["printer"], "copies": result["copies"], "template": result["template"]}
+
+
+@router.post("/documents/{doc_id}/template-print")
+def document_print(doc_id: int, body: DirectPrint, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    """Imprime el documento con la plantilla elegida directamente en una impresora de Windows del equipo servidor."""
+    result = app.print_templates.render_document(current, doc_id, body.template, fmt="print", printer=body.printer,
+                                                 copies=body.copies)
+    return {"printed": True, "printer": result["printer"], "copies": result["copies"], "template": result["template"]}

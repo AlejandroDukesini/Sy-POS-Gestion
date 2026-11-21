@@ -73,7 +73,7 @@ SCHEMA: dict[str, dict[str, Field]] = {
     },
     "ventas": {
         "prices_include_tax": Field("bool", True, "Los precios incluyen IVA"),
-        "max_manual_discount_pct": Field("int", 10, "Descuento manual máximo (%)", minimum=0, maximum=100),
+        "max_manual_discount_pct": Field("int", 20, "Descuento manual máximo (%)", minimum=0, maximum=100),
         "void_same_day_only": Field("bool", False, "Solo anular ventas del mismo día"),
     },
     "inventario": {
@@ -82,8 +82,11 @@ SCHEMA: dict[str, dict[str, Field]] = {
         "low_stock_alerts": Field("bool", True, "Mostrar alertas de existencias bajas"),
     },
     "impresion": {
+        "default_printer": Field("str", "", "Impresora predeterminada de documentos y plantillas (vacío = la de Windows)",
+                                 max_len=200),
         "receipt_printer": Field("str", "DIGITALPOS", "Impresora de comprobantes", max_len=200),
-        "receipt_mode": Field("choice", "escpos", "Modo de impresión de comprobantes", choices=("escpos", "navegador")),
+        "receipt_mode": Field("choice", "escpos", "Modo de impresión de comprobantes",
+                              choices=("escpos", "navegador", "plantilla")),
         "receipt_width_chars": Field("choice", 48, "Ancho de papel", choices=(32, 42, 48)),
         "receipt_copies": Field("int", 1, "Copias del comprobante", minimum=1, maximum=5),
         "receipt_cut": Field("bool", True, "Cortar papel al terminar"),
