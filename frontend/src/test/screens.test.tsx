@@ -31,11 +31,34 @@ function me(role: 'admin' | 'employee', permissions: string[]) {
 afterEach(() => vi.restoreAllMocks());
 
 describe('pantalla de ingreso', () => {
-  it('muestra el formulario a la izquierda y el espacio «Aquí tu logo»', async () => {
+  it('muestra el formulario y un panel visual limpio (sin marcos ni textos de relleno)', async () => {
     mockApi((url) => (url.endsWith('/company/public') ? { name: 'X', has_logo: false } : json(401, {})));
     render(<ToastProvider><AuthProvider><LoginPage /></AuthProvider></ToastProvider>);
     expect(screen.getByRole('heading', { name: 'Iniciar sesión' })).toBeInTheDocument();
-    expect(await screen.findByText('Aquí tu logo')).toBeInTheDocument();
+    const panel = screen.getByRole('region', { name: 'Identidad de la empresa' });
+    expect(panel.textContent).toBe('');
+    expect(screen.queryByText('Aquí tu logo')).toBeNull();
+  });
+
+  it('el panel muestra el fondo y el logotipo propios, independientes y sin marco', async () => {
+    mockApi((url) => {
+      if (url.endsWith('/company/public')) return { name: 'Ferretería', has_logo: true };
+      if (url.endsWith('/appearance')) {
+        return { theme: {}, login: { version: 3, has_background: true, has_logo: true,
+          background: { fit: 'cover', pos_x: 20, pos_y: 80, zoom: 150, darken: 30, overlay_color: '#102030', overlay_opacity: 40 },
+          logo: { size: 200, position: 'bottom-right', offset: 24, use_company: true } } };
+      }
+      return json(401, {});
+    });
+    render(<ToastProvider><AuthProvider><LoginPage /></AuthProvider></ToastProvider>);
+    const logo = await screen.findByRole('img', { name: 'Logotipo de Ferretería' });
+    expect(logo.getAttribute('src')).toBe('/api/appearance/login/logotipo?v=3');      // el propio, no el de la empresa
+    expect(logo.className).toBe('login-logo');
+    expect(logo.parentElement!.getAttribute('data-pos')).toBe('bottom-right');
+    const panel = screen.getByRole('region', { name: 'Identidad de la empresa' });
+    expect(panel.querySelector('img.login-bg')!.getAttribute('src')).toBe('/api/appearance/login/fondo?v=3');
+    expect(panel.style.getPropertyValue('--bg-zoom')).toBe('1.5');
+    expect(panel.style.getPropertyValue('--ov-opacity')).toBe('0.4');
   });
 
   it('valida campos junto a cada uno y muestra el error del servidor', async () => {

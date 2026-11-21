@@ -179,7 +179,7 @@ function NotesTab({ supplierId, onChange }: { supplierId: number; onChange: () =
             <DataTable caption="Notas" rows={notes.data} rowKey={(n: any) => n.id} onSelect={setEditing} columns={[
               { key: 'c', header: 'Categoría', render: (n: any) => <Badge kind={n.category === 'deuda' || n.category === 'reclamacion' ? 'warning' : 'info'}>{NOTE_CATEGORIES[n.category]}</Badge> },
               { key: 't', header: 'Nota', render: (n: any) => (
-                <span>{n.important ? <Star size={14} aria-label="Importante" style={{ color: 'var(--danger, #b91c1c)' }} /> : null} <strong>{n.title}</strong>
+                <span>{n.important ? <Star size={14} aria-label="Importante" style={{ color: 'var(--danger)' }} /> : null} <strong>{n.title}</strong>
                   {n.body && <><br /><small className="muted" style={{ whiteSpace: 'pre-wrap' }}>{n.body}</small></>}</span>) },
               { key: 'v', header: 'Vence', render: (n: any) => n.due_date ? <>{date(n.due_date)}{overdue(n) && <> <Badge kind="danger">Vencida</Badge></>}</> : '—' },
               { key: 's', header: 'Estado', render: (n: any) => n.status === 'pendiente' ? <Badge kind="warning">Pendiente</Badge>

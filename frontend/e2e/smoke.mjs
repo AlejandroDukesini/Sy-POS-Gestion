@@ -92,7 +92,7 @@ try {
 
   // 2. Ingreso (formulario a la izquierda, logo a la derecha)
   await page.getByRole('heading', { name: 'Iniciar sesión' }).waitFor();
-  check(await page.getByText('Aquí tu logo').isVisible(), 'pantalla de ingreso con «Aquí tu logo»');
+  check(await page.locator('.login-brand').isVisible() && (await page.locator('.login-brand').innerText()).trim() === '', 'pantalla de ingreso con panel visual limpio (sin «Aquí tu logo»)');
   const form = await page.locator('.login-form').boundingBox();
   const brand = await page.locator('.login-brand').boundingBox();
   check(form.x < brand.x && Math.abs(form.width - brand.width) < 4, 'ingreso en dos columnas en pantalla ancha');

@@ -6,6 +6,7 @@ import { AppShell, useSections } from './components/layout/AppShell';
 import { EmptyState, Loading } from './components/ui/Feedback';
 import { AuthProvider, useAuth } from './context/Auth';
 import { PrefsProvider } from './context/Prefs';
+import { ThemeProvider } from './context/Theme';
 import { ToastProvider } from './context/Toast';
 import { ChangePasswordPage } from './pages/ChangePassword';
 import { LoginPage } from './pages/Login';
@@ -100,6 +101,7 @@ function Gate() {
 export default function App() {
   return (
     <BrowserRouter>
+      <ThemeProvider>
       <ToastProvider>
         <AuthProvider>
           <PrefsProvider>
@@ -107,6 +109,7 @@ export default function App() {
           </PrefsProvider>
         </AuthProvider>
       </ToastProvider>
+      </ThemeProvider>
     </BrowserRouter>
   );
 }

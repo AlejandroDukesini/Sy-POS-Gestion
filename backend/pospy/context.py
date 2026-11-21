@@ -9,6 +9,7 @@ from .core.secrets_store import SecretStore
 from .core.settings import Settings
 from .db import Database
 from .services.access import AccessService
+from .services.appearance import AppearanceService
 from .services.auth import AuthService
 from .services.backup import BackupService
 from .services.catalog import CatalogService
@@ -45,6 +46,7 @@ class AppContext:
         self.settings = Settings(self.db)
         self.secrets = SecretStore(self.db, config.data_dir, config.master_key)
         self.access = AccessService(self.db)
+        self.appearance = AppearanceService(self.db, config.data_dir)
         self.auth = AuthService(self.db, self.settings, config.data_dir, config.setup_code, self.access)
         self.users = UserService(self.db)
         self.realtime = RealtimeHub()

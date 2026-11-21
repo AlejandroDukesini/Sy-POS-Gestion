@@ -124,8 +124,8 @@ export function CompanyPage() {
       <ManageBack title="Empresa" description="Estos datos aparecen en los documentos y comprobantes." />
       <Card title="Logotipo">
         <div className="card-body row">
-          <div className="logo-slot" style={{ width: 220, fontSize: '1rem', aspectRatio: '4 / 3', color: 'var(--text-muted)' }}>
-            {hasLogo ? <img src={`/api/company/logo?v=${version}`} alt="Logotipo actual" /> : <span>Aquí tu logo</span>}
+          <div className="logo-preview">
+            {hasLogo ? <img src={`/api/company/logo?v=${version}`} alt="Logotipo actual" /> : <span>Sin logotipo</span>}
           </div>
           <div className="stack">
             <Field label="Subir logotipo (PNG, JPG o WEBP, máximo 2 MB)">
@@ -139,7 +139,7 @@ export function CompanyPage() {
       </Card>
       <SettingsSection section="empresa" title="Datos de la empresa" />
       <ConfirmDialog open={confirm} title="Quitar logotipo" danger confirmLabel="Quitar" onClose={() => setConfirm(false)} onConfirm={remove}
-        message="La pantalla de ingreso volverá a mostrar «Aquí tu logo»." />
+        message="Se quitará el logotipo de la empresa del menú, de los documentos y de la pantalla de ingreso (si no tiene uno propio)." />
     </div>
   );
 }

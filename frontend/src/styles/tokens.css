@@ -1,4 +1,6 @@
-/* Tokens de diseño. Cada par texto/fondo cumple WCAG 2.1 AA (lo verifica src/test/contrast.test.ts). */
+/* Tokens de diseño. Cada par texto/fondo cumple WCAG 2.1 AA (lo verifica src/test/contrast.test.ts).
+   Son los valores de fábrica; el tema del negocio (lib/theme.ts, Gestión › Apariencia) los reemplaza con
+   :root[data-brand="custom"]. Los componentes usan SIEMPRE estos nombres semánticos, nunca colores fijos. */
 :root {
   color-scheme: light;
   --font: Arial, "Helvetica Neue", Helvetica, "Segoe UI", sans-serif;
@@ -28,6 +30,13 @@
   --on-primary: #ffffff;
   --primary-soft: #dbe6ff;
   --on-primary-soft: #1e3a8a;
+  --secondary: #475569;
+  --secondary-hover: #334155;
+  --on-secondary: #ffffff;
+  --accent: #0e7490;
+  --on-accent: #ffffff;
+  --success: #15803d;
+  --warning: #b45309;
   --danger: #b91c1c;
   --danger-hover: #991b1b;
   --on-danger: #ffffff;
@@ -43,6 +52,15 @@
   --shadow: 0 1px 2px rgb(15 23 42 / 0.06), 0 4px 12px rgb(15 23 42 / 0.06);
   --shadow-lg: 0 10px 30px rgb(15 23 42 / 0.16);
   --overlay: rgb(15 23 42 / 0.45);
+
+  /* Menú lateral: de fábrica usa las superficies; el tema del negocio (Gestión › Apariencia) puede darle color propio. */
+  --nav-bg: var(--surface);
+  --nav-text: var(--text);
+  --nav-hover: var(--surface-hover);
+  --nav-border: var(--border);
+  --nav-active-bg: var(--primary-soft);
+  --nav-active-text: var(--on-primary-soft);
+  --nav-indicator: var(--primary);
 }
 
 :root[data-theme="dark"] {
@@ -60,6 +78,13 @@
   --on-primary: #0b1530;
   --primary-soft: #1f3366;
   --on-primary-soft: #dbe6ff;
+  --secondary: #a5b4c8;
+  --secondary-hover: #c3cddb;
+  --on-secondary: #0b1220;
+  --accent: #5fd3e6;
+  --on-accent: #0b1220;
+  --success: #6ee7a0;
+  --warning: #fbbf5b;
   --danger: #ff9b9b;
   --danger-hover: #ffc0c0;
   --on-danger: #3b0a0a;

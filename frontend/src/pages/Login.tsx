@@ -1,25 +1,56 @@
 import { LogIn } from 'lucide-react';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type CSSProperties, type FormEvent } from 'react';
 import { ApiError, get } from '../api/client';
 import { Button } from '../components/ui/Button';
 import { Alert, ErrorAlert } from '../components/ui/Feedback';
 import { TextField } from '../components/ui/Form';
 import { useAuth } from '../context/Auth';
+import { DEFAULT_LOGIN, useOptionalTheme, type LoginLook } from '../context/Theme';
 
 interface PublicCompany { name: string; has_logo: boolean }
 
-export function LogoPanel() {
-  const [company, setCompany] = useState<PublicCompany | null>(null);
-  useEffect(() => {
-    get<PublicCompany>('/company/public').then(setCompany).catch(() => setCompany(null));
-  }, []);
+/**
+ * Panel visual de la pantalla de ingreso: imagen de fondo y logotipo INDEPENDIENTES, configurados en
+ * Gestión › Apariencia. El logotipo se muestra solo (sin marcos, tarjetas ni fondos) y sin deformarse.
+ * Sin logotipo propio puede usarse el de la empresa; sin ninguno, el panel queda limpio con el color del tema.
+ */
+export function LoginVisual({ look, company, backgroundUrl, logoUrl, className = '' }: {
+  look: LoginLook; company: PublicCompany | null; backgroundUrl?: string | null; logoUrl?: string | null; className?: string;
+}) {
+  const bg = look.background;
+  const lg = look.logo;
+  const background = backgroundUrl !== undefined ? backgroundUrl
+    : look.has_background ? `/api/appearance/login/fondo?v=${look.version}` : null;
+  const logo = logoUrl !== undefined ? logoUrl
+    : look.has_logo ? `/api/appearance/login/logotipo?v=${look.version}`
+      : lg.use_company && company?.has_logo ? '/api/company/logo' : null;
+  const vars = {
+    '--bg-fit': bg.fit, '--bg-x': `${bg.pos_x}%`, '--bg-y': `${bg.pos_y}%`, '--bg-zoom': String(bg.zoom / 100),
+    '--bg-bright': String(1 - bg.darken / 100), '--ov-color': bg.overlay_color, '--ov-opacity': String(bg.overlay_opacity / 100),
+    '--logo-size': `${lg.size}px`, '--logo-offset': `${lg.offset}px`,
+  } as CSSProperties;
   return (
-    <section className="login-brand" aria-label="Identidad de la empresa">
-      <div className="logo-slot">
-        {company?.has_logo ? <img src="/api/company/logo" alt={`Logotipo de ${company.name}`} /> : <span>Aquí tu logo</span>}
-      </div>
+    <section className={`login-brand ${className}`} aria-label="Identidad de la empresa" style={vars}>
+      {background && <img className="login-bg" src={background} alt="" aria-hidden="true" draggable={false} />}
+      {background && bg.overlay_opacity > 0 && <div className="login-overlay" aria-hidden="true" />}
+      {logo && (
+        <div className="login-logo-layer" data-pos={lg.position}>
+          <img className="login-logo" src={logo} alt={`Logotipo de ${company?.name ?? 'la empresa'}`} draggable={false} />
+        </div>
+      )}
     </section>
   );
+}
+
+export function LogoPanel() {
+  const theme = useOptionalTheme();
+  const [company, setCompany] = useState<PublicCompany | null>(null);
+  const [own, setOwn] = useState<LoginLook | null>(null);
+  useEffect(() => {
+    get<PublicCompany>('/company/public').then(setCompany).catch(() => setCompany(null));
+    if (!theme) get<any>('/appearance').then((a) => setOwn({ ...DEFAULT_LOGIN, ...a.login })).catch(() => setOwn(null));
+  }, [theme]);
+  return <LoginVisual look={theme?.appearance.login ?? own ?? DEFAULT_LOGIN} company={company} />;
 }
 
 export function LoginPage({ initialUsername = '', onBack, notice }: { initialUsername?: string; onBack?: () => void; notice?: string } = {}) {

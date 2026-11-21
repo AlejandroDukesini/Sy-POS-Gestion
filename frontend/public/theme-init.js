@@ -15,3 +15,20 @@
     /* sin preferencias guardadas */
   }
 })();
+
+// Tema del negocio (Gestión › Apariencia): copia local de la hoja generada, solo para no parpadear al cargar.
+// La aplicación la reemplaza con la configuración del servidor. «?tema=original» la omite (recuperación).
+(function () {
+  try {
+    if (new URLSearchParams(window.location.search).get('tema') === 'original') return;
+    var css = localStorage.getItem('pospy.theme');
+    if (!css || css.length > 20000 || /[<>]|url\(|expression|@import/i.test(css)) return;
+    var el = document.createElement('style');
+    el.id = 'pospy-theme';
+    el.textContent = css;
+    document.head.appendChild(el);
+    document.documentElement.dataset.brand = 'custom';
+  } catch (e) {
+    /* sin almacenamiento local */
+  }
+})();

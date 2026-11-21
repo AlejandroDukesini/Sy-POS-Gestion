@@ -4,22 +4,22 @@
 :root[data-sidebar="collapsed"] .shell { --sidebar-w: 84px; }
 
 .sidebar { position: sticky; top: 0; height: 100dvh; display: flex; flex-direction: column; gap: 8px; padding: 16px 12px;
-  background: var(--surface); border-right: 1px solid var(--border); overflow-y: auto; scrollbar-gutter: stable; }
-.brand { display: flex; align-items: center; gap: 12px; padding: 4px 8px 16px; min-height: 56px; text-decoration: none; color: var(--text); }
+  background: var(--nav-bg); color: var(--nav-text); border-right: 1px solid var(--nav-border); overflow-y: auto; scrollbar-gutter: stable; }
+.brand { display: flex; align-items: center; gap: 12px; padding: 4px 8px 16px; min-height: 56px; text-decoration: none; color: var(--nav-text); }
 .brand img { width: 40px; height: 40px; border-radius: 10px; object-fit: contain; flex: none; }
 .brand-name { font-weight: 700; font-size: 1.0625rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav { display: flex; flex-direction: column; gap: 6px; }
 .nav-link { display: flex; align-items: center; gap: 14px; min-height: 56px; padding: 0 16px; border-radius: var(--radius);
-  color: var(--text); text-decoration: none; font-weight: 700; font-size: 1.0625rem;
+  color: var(--nav-text); text-decoration: none; font-weight: 700; font-size: 1.0625rem;
   transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease), box-shadow var(--dur) var(--ease); }
-.nav-link:hover { background: var(--surface-hover); }
-.nav-link.active { background: var(--primary-soft); color: var(--on-primary-soft); box-shadow: inset 4px 0 0 var(--primary); }
+.nav-link:hover { background: var(--nav-hover); }
+.nav-link.active { background: var(--nav-active-bg); color: var(--nav-active-text); box-shadow: inset 4px 0 0 var(--nav-indicator); }
 .nav-link svg { flex: none; }
 .nav-short { display: none; }
 :root[data-sidebar="collapsed"] .nav-label, :root[data-sidebar="collapsed"] .brand-name { position: absolute; width: 1px; height: 1px;
   overflow: hidden; clip: rect(0 0 0 0); }
 :root[data-sidebar="collapsed"] .nav-link { justify-content: center; padding: 0; }
-.sidebar-foot { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border); }
+.sidebar-foot { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--nav-border); }
 
 .main { display: flex; flex-direction: column; min-width: 0; }
 .topbar { position: sticky; top: 0; z-index: 20; height: var(--topbar-h); display: flex; align-items: center; gap: 12px;
@@ -56,11 +56,21 @@
 .login { display: grid; grid-template-columns: 1fr 1fr; min-height: 100dvh; }
 .login-form { display: flex; align-items: center; justify-content: center; padding: 32px 24px; background: var(--surface); }
 .login-form > div { width: min(440px, 100%); }
-.login-brand { display: flex; align-items: center; justify-content: center; padding: 32px; background: var(--primary-soft);
-  color: var(--on-primary-soft); }
-.logo-slot { width: min(420px, 90%); aspect-ratio: 4 / 3; border: 3px dashed currentColor; border-radius: var(--radius-lg);
-  display: grid; place-items: center; text-align: center; font-size: 1.75rem; font-weight: 700; padding: 24px; }
-.logo-slot img { max-width: 100%; max-height: 100%; object-fit: contain; }
+/* Panel visual: fondo y logotipo independientes (Gestión › Apariencia › Inicio de sesión). */
+.login-brand { position: relative; overflow: hidden; min-height: 100%; background: var(--primary-soft); color: var(--on-primary-soft); }
+.login-bg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; object-fit: var(--bg-fit, cover);
+  object-position: var(--bg-x, 50%) var(--bg-y, 50%); transform: scale(var(--bg-zoom, 1)); transform-origin: var(--bg-x, 50%) var(--bg-y, 50%);
+  filter: brightness(var(--bg-bright, 1)); user-select: none; }
+.login-overlay { position: absolute; inset: 0; background: var(--ov-color, #000); opacity: var(--ov-opacity, 0); pointer-events: none; }
+.login-logo-layer { position: absolute; inset: 0; display: flex; padding: var(--logo-offset, 32px); pointer-events: none;
+  align-items: center; justify-content: center; }
+.login-logo-layer[data-pos^="top"] { align-items: flex-start; }
+.login-logo-layer[data-pos^="bottom"] { align-items: flex-end; }
+.login-logo-layer[data-pos$="left"] { justify-content: flex-start; }
+.login-logo-layer[data-pos$="right"] { justify-content: flex-end; }
+/* Solo la imagen: sin bordes, marcos ni fondos; respeta la transparencia y nunca se deforma ni sale del panel. */
+.login-logo { display: block; width: var(--logo-size, 240px); max-width: 100%; max-height: 100%; height: auto; object-fit: contain;
+  border: 0; background: none; box-shadow: none; }
 
 @media (max-width: 1180px) {
   .split { grid-template-columns: minmax(0, 1fr); }
@@ -70,11 +80,11 @@
 @media (max-width: 900px) {
   .shell { grid-template-columns: minmax(0, 1fr); }
   .sidebar { position: fixed; z-index: 40; bottom: 0; top: auto; left: 0; right: 0; height: auto; flex-direction: row;
-    padding: 6px; border-right: 0; border-top: 1px solid var(--border); overflow: visible; }
+    padding: 6px; border-right: 0; border-top: 1px solid var(--nav-border); overflow: visible; }
   .sidebar .brand, .sidebar-foot { display: none; }
   .nav { flex-direction: row; flex: 1; justify-content: space-around; min-width: 0; }
   .nav-link { flex-direction: column; gap: 2px; min-height: 60px; padding: 4px 6px; font-size: 0.8125rem; flex: 1; justify-content: center; }
-  .nav-link.active { box-shadow: inset 0 -4px 0 var(--primary); }
+  .nav-link.active { box-shadow: inset 0 -4px 0 var(--nav-indicator); }
   /* Hasta seis secciones (administrador) en un teléfono de 360 px: los rótulos se recortan antes que desbordar. */
   .nav-link { min-width: 0; }
   .nav-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -87,8 +97,9 @@
   .topbar { padding: 0 16px; }
   .user-chip { display: none; }
   .login { grid-template-columns: 1fr; }
-  .login-brand { order: -1; min-height: 200px; padding: 20px; }
-  .logo-slot { aspect-ratio: auto; min-height: 140px; font-size: 1.375rem; }
+  .login-brand { order: -1; min-height: 200px; max-height: 40dvh; }
+  .login-logo-layer { padding: min(var(--logo-offset, 32px), 20px); }
+  .login-logo { max-height: calc(200px - 40px); }
 }
 
 @media print {

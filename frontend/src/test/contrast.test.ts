@@ -30,6 +30,7 @@ const TEXT_PAIRS: [string, string][] = [
   ['text-muted', 'surface-2'], ['on-primary', 'primary'], ['on-primary', 'primary-hover'], ['primary', 'surface'], ['primary', 'bg'],
   ['on-primary-soft', 'primary-soft'], ['on-danger', 'danger'], ['danger', 'surface'], ['on-danger-soft', 'danger-soft'],
   ['on-success-soft', 'success-soft'], ['on-warning-soft', 'warning-soft'], ['on-info-soft', 'info-soft'],
+  ['on-secondary', 'secondary'], ['on-secondary', 'secondary-hover'], ['on-accent', 'accent'],
 ];
 
 describe.each(Object.entries(themes))('contraste del tema %s', (_name, t) => {

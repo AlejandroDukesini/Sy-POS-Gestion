@@ -1,4 +1,4 @@
-import { Activity, ArrowLeft, Boxes, BarChart3, Building2, CreditCard, DatabaseBackup, FileSpreadsheet, FolderSync, LayoutTemplate, Printer, ShieldCheck,
+import { Activity, ArrowLeft, Boxes, BarChart3, Building2, CreditCard, DatabaseBackup, FileSpreadsheet, FolderSync, LayoutTemplate, Palette, Printer, ShieldCheck,
   SlidersHorizontal, Tags, Truck, Users, UserSquare2 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Link, Route, Routes } from 'react-router-dom';
@@ -6,6 +6,7 @@ import { RequirePermission } from '../../App';
 import { PageHeader } from '../../components/ui/Layout';
 import { useAuth } from '../../context/Auth';
 import { ActivityPage, ReportsPage } from './Activity';
+import { AppearancePage } from './Appearance';
 import { BackupsPage } from './Backups';
 import { CategoriesPage, PartiesPage, PaymentMethodsPage } from './Catalogs';
 import { DocumentTypesPage } from './DocumentTypes';
@@ -32,6 +33,7 @@ export const MANAGE_ITEMS: Item[] = [
   { to: 'parametros', title: 'Ventas e inventario', desc: 'IVA, descuentos, existencias, archivos de proveedores y semana de los informes.', icon: <SlidersHorizontal size={28} />, perms: ['gestion.configuracion'], group: 'Operación' },
   { to: 'impresion', title: 'Impresión', desc: 'Cualquier impresora de Windows, predeterminada y comprobantes.', icon: <Printer size={28} />, perms: ['gestion.configuracion'], group: 'Operación' },
   { to: 'integraciones', title: 'Integraciones de inventario', desc: 'Excel, carpeta de red, OneDrive y Google Drive.', icon: <FolderSync size={28} />, perms: ['gestion.integraciones'], group: 'Sistema' },
+  { to: 'apariencia', title: 'Apariencia del sistema', desc: 'Paleta de colores de todo el POS (claro y oscuro) y pantalla de ingreso: fondo y logotipo.', icon: <Palette size={28} />, perms: ['gestion.configuracion'], group: 'Sistema' },
   { to: 'empresa', title: 'Empresa', desc: 'Nombre, logotipo, colores y datos de documentos.', icon: <Building2 size={28} />, perms: ['gestion.configuracion'], group: 'Sistema' },
   { to: 'seguridad', title: 'Sesiones y seguridad', desc: 'Activar o desactivar el inicio de sesión, cuenta administrativa, inactividad y bloqueos.', icon: <ShieldCheck size={28} />, perms: ['gestion.configuracion'], group: 'Sistema' },
   { to: 'respaldos', title: 'Copias de seguridad', desc: 'Crear, verificar, descargar y restaurar.', icon: <DatabaseBackup size={28} />, perms: ['gestion.respaldos'], group: 'Sistema' },
@@ -96,6 +98,7 @@ export default function ManageRoutes() {
       <Route path="impresion" element={guard('impresion', <PrintingPage />)} />
       <Route path="integraciones/*" element={guard('integraciones', <IntegrationsPage />)} />
       <Route path="empresa" element={guard('empresa', <CompanyPage />)} />
+      <Route path="apariencia" element={guard('apariencia', <AppearancePage />)} />
       <Route path="seguridad" element={guard('seguridad', (
         <div className="stack"><ManageBack title="Sesiones y seguridad" /><SecurityPanel />
           <SettingsSection section="seguridad" title="Cierre de sesión automático y bloqueos" /></div>))} />

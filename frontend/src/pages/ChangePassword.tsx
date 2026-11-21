@@ -5,6 +5,7 @@ import { Button } from '../components/ui/Button';
 import { Alert, ErrorAlert } from '../components/ui/Feedback';
 import { TextField } from '../components/ui/Form';
 import { useAuth } from '../context/Auth';
+import { LogoPanel } from './Login';
 import { useToast } from '../context/Toast';
 
 export function PasswordForm({ onDone }: { onDone?: () => void }) {
@@ -77,7 +78,7 @@ export function ChangePasswordPage() {
           <Button variant="ghost" onClick={() => void logout()}>Salir</Button>
         </div>
       </main>
-      <section className="login-brand" aria-hidden><div className="logo-slot"><span>POS-PY</span></div></section>
+      <LogoPanel />
     </div>
   );
 }

@@ -122,9 +122,13 @@ try {
   check(await page.locator('.cv-el-image img').count() === 1, '2 Arrastrar «Logotipo de empresa»: la imagen aparece en el papel');
   await page.getByLabel('Ancho (mm)').fill('20');
   await page.getByLabel('Ancho (mm)').press('Enter');
+  await page.waitForFunction(() => Number(document.querySelector('label.cv-num:nth-of-type(4) input')?.value ?? 0) !== 15, null, { timeout: 3000 }).catch(() => {});
+  await page.getByLabel('Alto (mm)').evaluate(() => new Promise((r) => setTimeout(r, 300)));
   const logoH = Number(await page.getByLabel('Alto (mm)').inputValue());
   check(Math.abs(logoH - 10) < 0.2, `   Redimensionar a 20 mm conserva la proporción 2:1 (alto ${logoH} mm)`);
   await page.getByRole('button', { name: 'Centrar horizontalmente' }).click();
+  await page.waitForFunction(() => [...document.querySelectorAll('label.cv-num')].some((l) => l.textContent.startsWith('X (mm)')
+    && l.querySelector('input').value === '30'), null, { timeout: 3000 }).catch(() => {});
   check(Number(await page.getByLabel('X (mm)').inputValue()) === 30, '   Centrar en el área imprimible (X = 30 mm)');
 
   // 3. Texto estático: arrastrar, escribir, negrita y mover con el ratón
