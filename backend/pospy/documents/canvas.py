@@ -461,8 +461,13 @@ def compile_canvas(canvas: dict) -> tuple[dict, dict, list[str]]:
             acc = x1
             product_cols: dict[str, dict] = {}
             for col in t["columns"]:
+                if acc >= x2 - 0.2:          # la columna no cabe en el papel: se omite (y se avisa)
+                    notes.append(f"La columna «{col['header']}» de la tabla no cabe en el ancho del papel: se omite.")
+                    continue
                 a, acc = acc, min(acc + col["width_mm"], x2)
-                ca, cb = _index(xe, a) + 1, max(_index(xe, acc), _index(xe, a) + 1)
+                last = len(xe) - 1
+                ca = min(_index(xe, a) + 1, last)
+                cb = min(max(_index(xe, acc), ca), last)
                 letter = col_letter(ca)
                 money = col["field"] in MONEY_FIELDS
                 b_all = t["borders"] == "all"
