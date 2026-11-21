@@ -50,7 +50,7 @@ FIELDS: dict[str, dict[str, tuple[str, str]]] = {
         "fecha": ("Fecha", "date"), "fecha_larga": ("Fecha en texto (MARTES, 18 DE NOVIEMBRE)", "text"),
         "hora_impresion": ("Hora de impresión", "time"), "fecha_hora_impresion": ("Fecha y hora de impresión", "datetime"),
         "valido_hasta": ("Válido hasta", "date"), "vendedor": ("Empleado responsable", "text"),
-        "observaciones": ("Observaciones", "text"),
+        "observaciones": ("Observaciones", "text"), "metodo_pago": ("Método de pago", "text"),
     },
     "Totales": {
         "subtotal": ("Subtotal", "money"), "descuento_pct": ("Porcentaje de descuento", "number"),

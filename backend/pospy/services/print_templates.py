@@ -37,6 +37,7 @@ from .scopes import InventoryScopes
 KINDS = {"documento": "Documento comercial", "venta": "Venta", "recibo": "Recibo"}
 MAX_EXCEL = 10 * 1024 * 1024
 MAX_IMAGE = 3 * 1024 * 1024
+MAX_IMAGE_PX = 6000
 STAGING_TTL_FILES = 50
 
 
@@ -433,6 +434,8 @@ class PrintTemplateService:
             self._row(conn, actor, public_id)
         if len(content) > MAX_IMAGE:
             raise ValidationError("Imagen demasiado grande.", {"file": "Máximo 3 MB."})
+        if Path(filename or "").suffix.lower() not in ("", ".png", ".jpg", ".jpeg"):
+            raise ValidationError("Use una imagen JPG o PNG.", {"file": "Extensión no permitida."})
         try:
             if content[:2] == b"\xff\xd8":
                 w, h, _, _ = _jpeg_info(content)
@@ -444,10 +447,37 @@ class PrintTemplateService:
                 raise ImageError("formato")
         except (ImageError, ValueError, IndexError):
             raise ValidationError("Use una imagen JPG o PNG (8 bits, sin entrelazado).", {"file": "Imagen no válida."}) from None
+        if not (1 <= w <= MAX_IMAGE_PX and 1 <= h <= MAX_IMAGE_PX):
+            raise ValidationError(f"La imagen debe medir como máximo {MAX_IMAGE_PX} × {MAX_IMAGE_PX} píxeles.", {"file": "Dimensiones no válidas."})
         name = f"img-{hashlib.sha256(content).hexdigest()[:16]}{ext}"
         (self._dir(public_id) / name).write_bytes(content)
         scale = min(1.0, 200 / max(w, h))           # tamaño inicial razonable (máx. 200 pt)
         return {"file": name, "w": round(w * scale, 2), "h": round(h * scale, 2)}
+
+    def add_company_logo(self, actor: Actor, public_id: str, data_dir: Path) -> dict:
+        """Copia el logotipo configurado de la empresa a la plantilla (Gestión › Empresa)."""
+        for suffix in (".png", ".jpg", ".jpeg"):
+            path = data_dir / f"logo{suffix}"
+            if path.is_file():
+                return self.add_image(actor, public_id, path.name, path.read_bytes())
+        raise ValidationError("La empresa no tiene logotipo. Súbalo en Gestión › Empresa.")
+
+    def template_xlsx(self, actor: Actor, public_id: str) -> tuple[bytes, str]:
+        """Plantilla Excel generada desde el diseño: campos como {Nombre del campo} y una fila modelo de productos."""
+        actor.require("gestion.configuracion")
+        with self.db.read() as conn:
+            row = self._row(conn, actor, public_id)
+            v = self._version(conn, row["id"], row["current_version"])
+        compiled, cbind, _ = self._design(v["layout"], v["bindings"])
+        final = json.loads(json.dumps(compiled))
+        if cbind.get("products"):
+            p = cbind["products"]
+            labels = {k: lbl for k, (lbl, _) in engine.LINE_FIELDS.items()}
+            for letter, b in p["columns"].items():
+                ref = f"{letter}{p['start']}"
+                final["cells"].setdefault(ref, {})["v"] = "{" + (labels.get(b.get("field", ""), "") or "Valor") + "}"
+        name = re.sub(r"[^A-Za-z0-9_-]+", "_", row["name"])[:50] or "plantilla"
+        return write_xlsx(final, self._images(public_id, final), row["name"]), f"{name}.xlsx"
 
     def image(self, actor: Actor, public_id: str, name: str) -> tuple[bytes, str]:
         if not any(actor.can(p) for p in ("gestion.configuracion", "documentos.ver", "ventas.historial")):
@@ -474,8 +504,16 @@ class PrintTemplateService:
         elif data.get("bindings") is not None:
             bindings = self._clean_bindings(data["bindings"])
         compiled, cbind, design_notes = self._design(layout, bindings)
-        lines = max(0, min(200, int(data.get("lines") or 3)))
-        demo = engine.demo_data(lines, self._now_local())
+        if data.get("sale_id"):
+            # Vista previa con una venta REAL autorizada: solo lectura, no registra emisión ni toca la venta.
+            if not (actor.can("ventas.historial") or actor.can("ventas.vender")):
+                actor.require("ventas.historial")
+            with self.db.read() as conn:
+                _, header, real_lines = self._sale_data(conn, actor, int(data["sale_id"]))
+            demo = engine.DocData(header=header, lines=real_lines, printed_at=self._now_local())
+        else:
+            lines = max(0, min(200, int(data.get("lines") or 3)))
+            demo = engine.demo_data(lines, self._now_local())
         try:
             final, totals = engine.render(compiled, cbind, demo)
         except engine.BindingError as exc:
@@ -547,8 +585,31 @@ class PrintTemplateService:
                   "cliente_tipo_documento": _id_type(doc["customer_identification"]),
                   "cliente_direccion": doc["customer_address"], "cliente_telefono": doc["customer_phone"],
                   "cliente_email": doc["customer_email"], "vendedor": doc["user_name"], "observaciones": doc["notes"],
-                  "iva_incluido": _dec(doc["tax_cents"])}
+                  "metodo_pago": "", "iva_incluido": _dec(doc["tax_cents"])}
         return self._emit(actor, row, v, "documento", doc_id, f"{doc['type_name']}-{doc['number']}", header, lines, fmt)
+
+    def _sale_data(self, conn, actor: Actor, sale_id: int):
+        """Datos REALES de una venta (solo lectura). Valida inventario y permisos de quien la consulta."""
+        sale = conn.execute("SELECT s.*, u.full_name AS user_name FROM sales s JOIN users u ON u.id = s.user_id"
+                            " WHERE s.id = ?", (sale_id,)).fetchone()
+        if not sale:
+            raise NotFoundError("Venta no encontrada.")
+        self.scopes.check(conn, actor, sale["inventory_id"], "Venta")
+        if not actor.can("ventas.historial") and sale["user_id"] != actor.id:
+            actor.require("ventas.historial")
+        lines = self._lines(conn.execute("SELECT * FROM sale_lines WHERE sale_id = ? ORDER BY line_no", (sale_id,)).fetchall())
+        customer = conn.execute("SELECT * FROM customers WHERE id = ?", (sale["customer_id"],)).fetchone() if sale["customer_id"] else None
+        methods = ", ".join(r[0] for r in conn.execute(
+            "SELECT DISTINCT m.name FROM sale_payments p JOIN payment_methods m ON m.id = p.method_id WHERE p.sale_id = ?"
+            " ORDER BY m.sort_order", (sale_id,)))
+        header = {**self._company(), "tipo_documento": "VENTA" + (" ANULADA" if sale["status"] == "anulada" else ""),
+                  "numero": sale["number"], "fecha": parse_date(sale["sale_date"]), "valido_hasta": "",
+                  "cliente_nombre": sale["customer_name"], "cliente_identificacion": sale["customer_identification"],
+                  "cliente_tipo_documento": _id_type(sale["customer_identification"]),
+                  "cliente_direccion": customer["address"] if customer else "", "cliente_telefono": customer["phone"] if customer else "",
+                  "cliente_email": customer["email"] if customer else "", "vendedor": sale["user_name"], "observaciones": sale["notes"],
+                  "metodo_pago": methods, "iva_incluido": _dec(sale["tax_cents"])}
+        return sale, header, lines
 
     def render_sale(self, actor: Actor, sale_id: int, public_id: str | None = None, kind: str = "venta",
                     fmt: str = "pdf") -> dict:
@@ -557,26 +618,11 @@ class PrintTemplateService:
         if kind not in ("venta", "recibo"):
             raise ValidationError("Tipo de plantilla no válido.")
         with self.db.read() as conn:
-            sale = conn.execute("SELECT s.*, u.full_name AS user_name FROM sales s JOIN users u ON u.id = s.user_id"
-                                " WHERE s.id = ?", (sale_id,)).fetchone()
-            if not sale:
-                raise NotFoundError("Venta no encontrada.")
-            self.scopes.check(conn, actor, sale["inventory_id"], "Venta")
-            if not actor.can("ventas.historial") and sale["user_id"] != actor.id:
-                actor.require("ventas.historial")
+            sale, header, lines = self._sale_data(conn, actor, sale_id)
             row = self._choose(conn, actor, sale["inventory_id"], kind, None, public_id)
             if not row:
                 raise ValidationError(f"No hay una plantilla de {KINDS[kind].lower()} predeterminada para este inventario.")
             v = self._version(conn, row["id"], row["current_version"])
-            lines = self._lines(conn.execute("SELECT * FROM sale_lines WHERE sale_id = ? ORDER BY line_no", (sale_id,)).fetchall())
-            customer = conn.execute("SELECT * FROM customers WHERE id = ?", (sale["customer_id"],)).fetchone() if sale["customer_id"] else None
-        header = {**self._company(), "tipo_documento": "VENTA" + (" ANULADA" if sale["status"] == "anulada" else ""),
-                  "numero": sale["number"], "fecha": parse_date(sale["sale_date"]), "valido_hasta": "",
-                  "cliente_nombre": sale["customer_name"], "cliente_identificacion": sale["customer_identification"],
-                  "cliente_tipo_documento": _id_type(sale["customer_identification"]),
-                  "cliente_direccion": customer["address"] if customer else "", "cliente_telefono": customer["phone"] if customer else "",
-                  "cliente_email": customer["email"] if customer else "", "vendedor": sale["user_name"], "observaciones": sale["notes"],
-                  "iva_incluido": _dec(sale["tax_cents"])}
         return self._emit(actor, row, v, "venta", sale_id, f"venta-{sale['number']}", header, lines, fmt)
 
     def _emit(self, actor: Actor, row, v: dict, target_type: str, target_id: int, label: str, header: dict,

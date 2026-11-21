@@ -149,6 +149,7 @@ try {
   const cd = page.getByRole('dialog', { name: 'Crear plantilla desde cero' });
   await cd.getByLabel('Nombre', { exact: false }).fill('Orden diseñada');
   await cd.getByLabel('Tipo de documento').selectOption(String(types.orden));
+  await cd.getByLabel('Editor').selectOption('grid');
   await cd.getByRole('button', { name: 'Crear y diseñar' }).click();
   await page.getByRole('heading', { name: 'Orden diseñada' }).waitFor();
   const grid = page.getByRole('grid', { name: 'Diseño de la plantilla' });

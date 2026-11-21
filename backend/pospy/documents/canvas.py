@@ -28,6 +28,9 @@ ELEMENT_TYPES = ("text", "variable", "image", "line", "rect", "spacer", "table")
 HEADER_KEYS = {k for g in FIELDS.values() for k in g}
 MONEY_FIELDS = {k for g in FIELDS.values() for k, (_, t) in g.items() if t == "money"} | {"precio", "precio_lista", "valor",
                                                                                           "descuento_linea"}
+# Ancho que la impresora térmica realmente imprime (no el ancho del rollo). Valores habituales y CONFIGURABLES
+# por plantilla en «Papel › Ancho imprimible»: rollo de 80 mm → 72 mm; rollo de 58 mm → 48 mm.
+PRINTABLE_DEFAULT = {"roll80": 72.0, "roll58": 48.0}
 MAX_ELEMENTS = 300
 _HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
@@ -35,8 +38,9 @@ _HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
 # ------------------------------------------------------------------ modelo inicial
 def default_canvas(paper: str = "roll80") -> dict:
     """Recibo inicial con variables reales del sistema (no contiene datos ficticios)."""
-    w = PAPERS.get(paper, PAPERS["roll80"])[0] or 80.0
-    inner = w - 6
+    page = default_page(paper)
+    x0 = page["margins"]["l"] + 1
+    inner = page["width_mm"] - page["margins"]["l"] - page["margins"]["r"] - 2
     els = [
         _el("e1", "variable", 3, 4, inner, 7, field="empresa_nombre", text={"size": 13, "bold": True, "align": "center"}),
         _el("e2", "variable", 3, 11, inner, 5, field="empresa_nit", text={"size": 8, "align": "center"}),
@@ -55,16 +59,22 @@ def default_canvas(paper: str = "roll80") -> dict:
         _el("e15", "variable", 3 + inner * 0.55, 61, inner * 0.45, 6, field="total", text={"size": 11, "bold": True, "align": "right"}),
         _el("e16", "variable", 3, 70, inner, 8, field="empresa_pie", text={"size": 7, "align": "center", "overflow": "wrap"}),
     ]
-    return {"kind": "canvas", "v": 1, "page": default_page(paper), "grid": {"size_mm": 1, "snap": True, "show": True},
+    for e in els:                         # los elementos parten del borde izquierdo del área imprimible
+        e["x"] = round(e["x"] - 3 + x0, 2)
+        e["y"] = round(e["y"] + page["margins"]["t"] - 2, 2)
+    return {"kind": "canvas", "v": 1, "page": page, "grid": {"size_mm": 1, "snap": True, "show": True},
             "discount_pct": "0", "elements": els}
 
 
 def default_page(paper: str = "roll80") -> dict:
     w, h = PAPERS.get(paper, PAPERS["roll80"])
     roll = paper.startswith("roll")
-    return {"paper": paper if paper in PAPERS else "roll80", "width_mm": w or 80.0, "height_mm": h or 120.0,
-            "orientation": "portrait", "unit": "mm", "auto_height": roll,
-            "margins": {"t": 2.0, "r": 2.0, "b": 2.0, "l": 2.0} if roll else {"t": 10.0, "r": 10.0, "b": 10.0, "l": 10.0}}
+    width = w or 80.0
+    printable = PRINTABLE_DEFAULT.get(paper, 0.0)
+    side = round((width - printable) / 2, 2) if printable else 10.0
+    return {"paper": paper if paper in PAPERS else "roll80", "width_mm": width, "height_mm": h or 120.0,
+            "orientation": "portrait", "unit": "mm", "auto_height": roll, "printable_width_mm": printable,
+            "margins": {"t": 2.0, "r": side, "b": 2.0, "l": side} if roll else {"t": 10.0, "r": 10.0, "b": 10.0, "l": 10.0}}
 
 
 def default_table(width: float) -> dict:
@@ -117,6 +127,20 @@ def sanitize_canvas(raw: Any, image_files: set[str]) -> dict:
     page["auto_height"] = bool(page_in.get("auto_height")) if paper.startswith("roll") or paper == "custom" else False
     m = page_in.get("margins") if isinstance(page_in.get("margins"), dict) else {}
     page["margins"] = {k: round(_num(m.get(k, page["margins"][k]), 0, 60, "Márgenes (mm)", problems), 2) for k in ("t", "r", "b", "l")}
+    if paper.startswith("roll"):
+        # Térmica: el ancho imprimible real define los márgenes laterales (centrado en el rollo).
+        raw_pw = page_in.get("printable_width_mm", page["printable_width_mm"])
+        try:
+            if float(raw_pw) > page["width_mm"]:      # cambió el rollo: se usa el ancho habitual del rollo nuevo
+                raw_pw = PRINTABLE_DEFAULT.get(paper, page["width_mm"])
+        except (TypeError, ValueError):
+            pass
+        pw = round(_num(raw_pw, 20, page["width_mm"], "Ancho imprimible (mm)", problems), 2)
+        page["printable_width_mm"] = pw
+        side = round((page["width_mm"] - pw) / 2, 2)
+        page["margins"]["l"] = page["margins"]["r"] = side
+    else:
+        page["printable_width_mm"] = 0.0
     if page["margins"]["l"] + page["margins"]["r"] >= page["width_mm"] - 5:
         problems.append("Los márgenes laterales no dejan espacio para imprimir.")
     grid_in = raw.get("grid") if isinstance(raw.get("grid"), dict) else {}

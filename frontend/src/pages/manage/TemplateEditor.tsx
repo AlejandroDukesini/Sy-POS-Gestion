@@ -13,6 +13,7 @@ import { Tabs } from '../../components/ui/Layout';
 import { useToast } from '../../context/Toast';
 import { dateTime } from '../../lib/format';
 import { useApi } from '../../lib/hooks';
+import { CanvasEditor } from './CanvasEditor';
 import {
   applyBorders, clearValues, colLetter, colPx, deleteCols, deleteRows, displayValue, expandToMerges, insertCols, insertRows,
   merge, mergeAt, normalize, parseRange, ref, rangeRef, rowPx, setBinding, setValue, styleOf, unmerge, updateStyle,
@@ -47,7 +48,9 @@ export function TemplateEditor() {
   const tpl = useApi<any>(`/print-templates/${id}${version ? `?version=${version}` : ''}`);
   if (tpl.loading && !tpl.data) return <Loading label="Cargando plantilla…" />;
   if (tpl.error) return <ErrorState error={tpl.error} onRetry={tpl.reload} />;
-  return <Editor key={`${tpl.data.public_id}-${tpl.data.version}-${tpl.data.loaded_version}`} tpl={tpl.data} reload={tpl.reload} />;
+  const key = `${tpl.data.public_id}-${tpl.data.version}-${tpl.data.loaded_version}`;
+  if (tpl.data.designer === 'canvas') return <CanvasEditor key={key} tpl={tpl.data} reload={tpl.reload} />;
+  return <Editor key={key} tpl={tpl.data} reload={tpl.reload} />;
 }
 
 function cssFor(st: StyleDef, zoom: number): CSSProperties {

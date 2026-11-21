@@ -8,9 +8,10 @@ import zipfile
 import openpyxl
 import pytest
 
-from pospy.core.errors import ValidationError
+from pospy.core.errors import NotFoundError, PermissionDenied, ValidationError
 from pospy.documents import engine
 from pospy.documents.canvas import compile_canvas, default_canvas, sanitize_canvas
+from pospy.documents.layout import LayoutError
 from pospy.documents.layout_pdf import page_count, render_pdf
 from pospy.documents.layout_xlsx import write_xlsx
 
@@ -97,3 +98,75 @@ def test_service_canvas_save_reopen_preview_and_sale_excel(ctx, admin, product, 
     values = [c.value for r in ws.iter_rows() for c in r if c.value is not None]
     assert "Martillo de uña" in values and 36000 in values      # datos reales de la venta, total calculado
     assert ctx.print_templates.render_sale(admin, sale["id"])["pages"] == 1
+
+
+def test_thermal_printable_width_is_real_and_configurable():
+    c = sanitize_canvas(default_canvas("roll80"), set())
+    assert c["page"]["printable_width_mm"] == 72 and c["page"]["margins"]["l"] == 4      # no se asume 80 mm útiles
+    assert all(e["x"] >= 4 and e["x"] + e["w"] <= 76.01 for e in c["elements"])
+    raw = default_canvas("roll80")
+    raw["page"]["printable_width_mm"] = 64
+    c = sanitize_canvas(raw, set())
+    assert c["page"]["margins"]["l"] == c["page"]["margins"]["r"] == 8
+    raw["page"]["printable_width_mm"] = 5
+    with pytest.raises(LayoutError):
+        sanitize_canvas(raw, set())
+    assert sanitize_canvas(default_canvas("roll58"), set())["page"]["printable_width_mm"] == 48
+
+
+def test_real_sale_preview_payment_method_template_export_and_logo(ctx, admin, product, cash_id, tmp_path):
+    t = ctx.print_templates.create_blank(admin, {"name": "Recibo pago", "kind": "venta", "designer": "canvas", "paper": "roll58"})
+    layout = t["layout"]
+    assert layout["page"]["paper"] == "roll58"
+    layout["elements"].append({"id": "pm", "type": "variable", "x": 5, "y": 90, "w": 48, "h": 5, "field": "metodo_pago",
+                               "text": {"size": 8}})
+    ctx.print_templates.save(admin, t["public_id"], {"layout": layout, "bindings": {}, "activate": True})
+    sale = ctx.sales.checkout(admin, {"lines": [{"product_id": product["id"], "qty": "1"}],
+                                      "payments": [{"method_id": cash_id, "amount": "18000"}]}, key())
+    with ctx.db.read() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0]
+        stock = conn.execute("SELECT stock_milli FROM products WHERE id = ?", (product["id"],)).fetchone()[0]
+    xlsx, _ = ctx.print_templates.preview_xlsx(admin, t["public_id"], {"sale_id": sale["id"]})
+    values = [c.value for r in openpyxl.load_workbook(io.BytesIO(xlsx)).active.iter_rows() for c in r if c.value is not None]
+    assert "Martillo de uña" in values and any("Efectivo" in str(v) for v in values)
+    pdf, _ = ctx.print_templates.preview(admin, t["public_id"], {"sale_id": sale["id"]})
+    assert pdf.startswith(b"%PDF")
+    with ctx.db.read() as conn:      # la vista previa con venta real no registra ni modifica nada
+        assert conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0] == before
+        assert conn.execute("SELECT stock_milli FROM products WHERE id = ?", (product["id"],)).fetchone()[0] == stock
+    data, name = ctx.print_templates.template_xlsx(admin, t["public_id"])
+    ws = openpyxl.load_workbook(io.BytesIO(data)).active
+    texts = [str(c.value) for r in ws.iter_rows() for c in r if c.value is not None]
+    assert "{Descripción}" in texts and name == "Recibo_pago.xlsx" and ws.sheet_view.showGridLines is False
+    with pytest.raises(ValidationError):
+        ctx.print_templates.add_company_logo(admin, t["public_id"], tmp_path)
+    (tmp_path / "logo.png").write_bytes(_png(40, 20))
+    img = ctx.print_templates.add_company_logo(admin, t["public_id"], tmp_path)
+    for bad_name, bad in (("logo.exe", _png(4, 4)), ("x.png", b"MZ no es imagen"), ("big.png", _png(6001, 1))):
+        with pytest.raises(ValidationError):
+            ctx.print_templates.add_image(admin, t["public_id"], bad_name, bad)
+    assert img["file"].startswith("img-") and img["file"].endswith(".png")
+
+
+def _png(w: int, h: int) -> bytes:
+    """PNG RGB válido (con CRC correctos) para probar la validación de imágenes."""
+    import struct
+    import zlib
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+    raw = b"".join(bytes(1) + bytes(3 * w) for _ in range(h))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+def test_canvas_permissions_employee_cannot_design(ctx, admin, employee, tmp_path):
+    t = ctx.print_templates.create_blank(admin, {"name": "Solo admin", "kind": "venta", "designer": "canvas"})
+    (tmp_path / "logo.png").write_bytes(_png(10, 10))
+    for call in (lambda: ctx.print_templates.create_blank(employee, {"name": "X", "kind": "venta", "designer": "canvas"}),
+                 lambda: ctx.print_templates.save(employee, t["public_id"], {"layout": t["layout"], "bindings": {}}),
+                 lambda: ctx.print_templates.template_xlsx(employee, t["public_id"]),
+                 lambda: ctx.print_templates.add_company_logo(employee, t["public_id"], tmp_path),
+                 lambda: ctx.print_templates.preview_xlsx(employee, t["public_id"], {"lines": 2})):
+        with pytest.raises((PermissionDenied, NotFoundError)):
+            call()

@@ -240,6 +240,8 @@ function CreateDialog({ onClose, onDone }: { onClose: () => void; onDone: (id: s
   const [name, setName] = useState('');
   const [kind, setKind] = useState('documento');
   const [docType, setDocType] = useState('');
+  const [designer, setDesigner] = useState<'canvas' | 'grid'>('canvas');
+  const [paper, setPaper] = useState('roll80');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -251,7 +253,8 @@ function CreateDialog({ onClose, onDone }: { onClose: () => void; onDone: (id: s
     if (Object.keys(e).length) return;
     setBusy(true);
     try {
-      const t = await post('/print-templates', { name: name.trim(), kind, document_type_id: kind === 'documento' ? Number(docType) : null });
+      const t = await post('/print-templates', { name: name.trim(), kind, document_type_id: kind === 'documento' ? Number(docType) : null,
+        designer, paper: designer === 'canvas' ? paper : null });
       onDone(t.public_id);
     } catch (err) {
       setError(err as ApiError);
@@ -265,6 +268,15 @@ function CreateDialog({ onClose, onDone }: { onClose: () => void; onDone: (id: s
       <ErrorAlert error={error} />
       <TextField label="Nombre" required value={name} onChange={setName} error={errors.name} maxLength={80} autoFocus />
       <KindFields kind={kind} setKind={setKind} docType={docType} setDocType={setDocType} errors={errors} />
+      <SelectField label="Editor" value={designer} onChange={(v) => setDesigner(v as 'canvas')}
+        options={[{ value: 'canvas', label: 'Diseñador visual (arrastrar y soltar, en milímetros)' }, { value: 'grid', label: 'Cuadrícula tipo Excel (celdas)' }]}
+        hint="Ambos generan el mismo PDF y un archivo Excel; el diseñador visual convierte las posiciones en filas y columnas." />
+      {designer === 'canvas' && (
+        <SelectField label="Papel" value={paper} onChange={setPaper}
+          options={[{ value: 'roll80', label: 'Térmica 80 mm (72 mm imprimibles)' }, { value: 'roll58', label: 'Térmica 58 mm (48 mm imprimibles)' },
+            { value: 'a4', label: 'A4' }, { value: 'letter', label: 'Carta' }, { value: 'custom', label: 'Personalizado' }]}
+          hint="Puede cambiarlo después en la pestaña «Papel» del editor." />
+      )}
     </Dialog>
   );
 }

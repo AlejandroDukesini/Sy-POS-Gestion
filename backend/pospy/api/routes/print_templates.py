@@ -51,6 +51,7 @@ class TemplatePreview(Strict):
     layout: dict[str, Any] | None = None
     bindings: dict[str, Any] | None = None
     lines: int = Field(default=3, ge=0, le=200)
+    sale_id: int | None = None      # vista previa con una venta real (solo lectura)
 
 
 class Duplicate(Strict):
@@ -193,3 +194,14 @@ def sale_xlsx(sale_id: int, template: str | None = None, kind: Literal["venta", 
               current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
     r = app.print_templates.render_sale(current, sale_id, template, kind, fmt="xlsx")
     return _xlsx(r["xlsx"], r["file_name"])
+
+
+@router.post("/print-templates/{public_id}/company-logo")
+def company_logo(public_id: str, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    return app.print_templates.add_company_logo(current, public_id, app.config.data_dir)
+
+
+@router.get("/print-templates/{public_id}/template.xlsx")
+def template_xlsx(public_id: str, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
+    data, name = app.print_templates.template_xlsx(current, public_id)
+    return _xlsx(data, name)
