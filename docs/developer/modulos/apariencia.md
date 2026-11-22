@@ -1,3 +1,5 @@
+> Documento técnico del módulo (estado vigente). La historia de cambios está en git; la visión general en [../README.md](../README.md).
+
 PERSONALIZACIÓN VISUAL GLOBAL Y PANTALLA DE INGRESO
 ===================================================
 

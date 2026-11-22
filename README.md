@@ -1,316 +1,96 @@
 # POS-PY
 
-Punto de venta y control de inventario para pequeñas empresas: ventas, entradas y salidas,
-cotizaciones y órdenes generadas desde plantillas de Excel, impresión en impresoras térmicas,
-finanzas de gestión y permisos por usuario.
+Punto de venta y control de inventario para pequeñas empresas: ventas, inventario por administrador y grupo de
+trabajo, cotizaciones y órdenes con plantillas propias, impresión en cualquier impresora de Windows, finanzas de
+gestión, tareas y permisos por usuario.
 
-Se usa como **aplicación web / PWA** o como **aplicación de escritorio para Windows**. Ambas
-comparten la misma interfaz (React) y el mismo backend (Python), que concentra toda la lógica de
-negocio. Los datos se guardan localmente en SQLite; no requiere internet ni servidor de base de datos.
+Funciona como **aplicación web / PWA** o como **aplicación de escritorio para Windows**. Ambas comparten la misma
+interfaz (React) y el mismo servidor (Python), que concentra toda la lógica de negocio. Los datos se guardan en el
+propio equipo (SQLite); no requiere servidor de base de datos.
 
 ## Funcionalidades
 
-- **Inventario**: productos con precio, costo, IVA y existencia mínima; entradas (contado, crédito,
-  inventario inicial), salidas, ajustes por conteo, costo promedio ponderado, historial por
-  movimiento, alertas de existencias bajas, importación con vista previa y exportación Excel/CSV, y
-  **observaciones de inventario** (faltantes, defectos, vencimientos, diferencias de conteo…) por
-  producto, con prioridad, estado, responsable, adjuntos e historial de seguimiento inmutable; no
-  alteran existencias ni movimientos. **Columnas personalizables**: la columna «Observaciones» viene
-  por defecto y el administrador agrega columnas propias (texto, número, fecha, sí/no, lista) antes
-  de importar un Excel o CSV o en cualquier momento («Administrar columnas»: editar con conversión
-  segura, ordenar, archivar o eliminar); se exportan con sus valores.
-- **Ventas (POS)**: lectura de código, carrito, descuentos con permiso y límite, pagos combinados,
-  venta a crédito, anulaciones y devoluciones parciales con reingreso al inventario.
-- **Documentos**: tipos configurables (cotizaciones, órdenes, etc.) generados sobre la plantilla de
-  Excel original, con vista previa, descarga, reimpresión y paso a venta.
-- **Finanzas**: partida doble automática, libro diario y mayor, balance de prueba, balance general,
-  flujo de caja, punto de equilibrio, cuentas por cobrar y por pagar, conciliación bancaria, e
-  **informes de ingresos** por día, semana, mes, año o periodo personalizado (cierres habituales o
-  anticipados, ventas registradas vs. dinero recibido, historial con revisiones, PDF y Excel).
-- **Gestión**: empleados (con o sin cuenta de acceso) y administradores con permisos asignables,
-  tareas asignadas a cada empleado, clientes, proveedores (expediente por proveedor: contacto,
-  asesor, notas y pendientes, visitas, cotizaciones y lista de productos en Excel con versiones),
-  categorías, métodos de pago, empresa, copias de seguridad con verificación y restauración,
-  historial de actividad.
-- **Notas y tareas**: bloc de notas personal con búsqueda; tareas personales (privadas de cada
-  persona) y tareas que el administrador asigna a uno o varios integrantes de sus grupos de trabajo
-  (o, sin grupo, a cualquier empleado), con prioridad, observaciones, estado individual de cada
-  responsable y estado general (Pendiente, En progreso, En revisión, Completada, Cancelada),
-  comentarios, solicitudes de cambio e historial. Los cambios se ven en vivo en todos los dispositivos.
-- **Grupos de trabajo**: el administrador crea grupos e invita empleados con un enlace (vigencia y
-  cupo configurables, revocable, sin QR); cada empleado entra con su propia cuenta, desde cualquier
-  dispositivo y red. Integrantes, solicitudes y estado de conexión se actualizan en vivo. Cada grupo
-  tiene su tablero de tareas.
-- **Integraciones**: sincronización de inventario desde OneDrive, Google Drive o una carpeta de red.
-- **Preferencias por usuario**: tema, tamaño de texto, densidad, alto contraste, animaciones reducidas.
-
-### Limitaciones
-
-- **No emite facturación electrónica DIAN.** El comprobante de venta es un documento interno.
-- Es contabilidad de gestión con un plan de cuentas de ejemplo basado en el PUC; no sustituye la
-  contabilidad oficial (sin retenciones automáticas, cierres de periodo ni información exógena).
-- Una sola sede y bodega; sin lotes ni seriales.
-- Vender y guardar requieren conexión con el backend (la PWA solo permite consultar el catálogo sin conexión).
-- La impresión ESC/POS (DIGITALPOS) y las integraciones con OneDrive y Google Drive se probaron con
-  impresoras y respuestas simuladas, no con equipos o cuentas reales.
-- El instalador no está firmado y no hay actualización automática.
+- **Ventas (POS)**: lectura de código, carrito, descuentos con permiso y máximo configurable, pagos combinados, crédito,
+  anulaciones y devoluciones parciales con reingreso al inventario.
+- **Inventario**: varios inventarios por administrador, cada uno asociado a un grupo de trabajo, con permisos por
+  integrante; entradas, salidas y ajustes con historial inmutable, costo promedio, alertas, importación y exportación
+  Excel/CSV, columnas personalizables, observaciones con seguimiento y sincronización en tiempo real entre equipos.
+- **Documentos e impresión**: cotizaciones y órdenes; plantillas importadas de Excel o diseñadas en cuadrícula o en un
+  editor visual (arrastrar y soltar, en milímetros); PDF, Excel e **impresión directa en cualquier impresora de
+  Windows**, sin Microsoft Excel.
+- **Finanzas**: partida doble automática, libros, balances, flujo de caja, cartera, conciliación e informes de ingresos.
+- **Gestión**: usuarios y permisos, grupos de trabajo con invitación por enlace, tareas y notas, clientes, proveedores
+  (expediente completo), copias de seguridad, historial de actividad, apariencia (paleta de colores y pantalla de
+  ingreso) y **equipos autorizados**.
+- **Integraciones**: inventario desde OneDrive, Google Drive o carpeta de red.
 
 ## Tecnologías
 
 | Parte | Tecnología |
 |---|---|
-| `backend/` | Python ≥ 3.12, FastAPI, Uvicorn, SQLite, openpyxl, cryptography, pywin32 (Windows) |
-| `frontend/` | React 18, TypeScript, Vite, vite-plugin-pwa, React Router, Vitest |
-| `desktop/` | Tauri v2 (Rust); el backend se empaqueta con PyInstaller |
-| `scripts/` | Empaquetado del backend y generación de iconos |
+| `backend/` | Python 3.12+, FastAPI, Uvicorn, SQLite, openpyxl, cryptography, pywin32 (Windows) |
+| `frontend/` | React 18, TypeScript, Vite, vite-plugin-pwa, React Router, Vitest, Playwright (E2E) |
+| `desktop/` | Tauri v2 (Rust); el servidor se empaqueta con PyInstaller |
 
----
+Arquitectura resumida: la interfaz llama a la API (`/api`), el servidor valida identidad, equipo, permisos e
+inventario en cada operación y guarda en SQLite (WAL, transacciones, auditoría inmutable). Detalle en
+[docs/developer/arquitectura.md](docs/developer/arquitectura.md).
 
-## Para usuarios finales (aplicación de escritorio)
+## Requisitos
 
-**Requisitos**: Windows 10/11. Opcional: Microsoft Excel (impresión directa de plantillas y
-plantillas con imágenes o gráficos) y el controlador de la impresora térmica.
+- Usuarios: Windows 10/11 (el instalador incluye todo; WebView2 se descarga si falta).
+- Desarrollo: Python 3.12+ y Node.js 20+ (Rust y MSVC solo para compilar el escritorio).
 
-1. Ejecute el instalador:
-   - `POS-PY_<versión>_x64-setup.exe` (NSIS): instalación por usuario, sin permisos de administrador.
-   - `POS-PY_<versión>_x64_es-ES.msi`: para despliegue corporativo.
-
-   Si falta WebView2, el instalador lo descarga. No hace falta instalar Python.
-2. Abra POS-PY: se muestra el **asistente de configuración inicial**, sin pedir cuenta (en el
-   escritorio el código de instalación se completa solo). Pasos: empresa, preferencias, seguridad,
-   empleados y finalizar. Si cierra la aplicación a mitad, continúa en el último paso.
-3. En el paso **Seguridad** decida si activa el **inicio de sesión**. Para activarlo debe asignar
-   antes una contraseña a la cuenta administrativa. Puede cambiarlo cuando quiera en
-   *Gestión › Sesiones y seguridad*; desactivarlo no borra cuentas, contraseñas, empleados ni permisos.
-   - **Activado**: cada persona ingresa con usuario y contraseña.
-   - **Desactivado** (acceso directo): en el propio equipo cada persona elige su perfil y trabaja con
-     sus permisos; los administradores con contraseña la siguen necesitando. Desde otros equipos de
-     la red siempre se pide contraseña.
-
-**Datos**: `%APPDATA%\com.pospy.app\data`. Desinstalar no los borra. Los archivos de proveedores
-(listas de productos y adjuntos de cotizaciones) están en la subcarpeta `proveedores\` y los adjuntos
-de las observaciones de inventario en `observaciones\`. Las copias de *Gestión › Copias de seguridad*
-solo incluyen la base de datos: copie también esas carpetas.
-
-**Actualizar**: cree una copia en *Gestión › Copias de seguridad* e instale la versión nueva encima
-de la anterior. Las migraciones se aplican al arrancar.
-
-**Impresora térmica**: instale su controlador en Windows, escriba el nombre exacto en
-*Gestión › Impresión* y use «Imprimir página de prueba».
-
----
-
-## Para desarrolladores
-
-### Requisitos
-
-- Python 3.12 o superior
-- Node.js 20 o superior
-- Solo para compilar el escritorio: Rust estable y Visual Studio Build Tools (MSVC)
-
-La versión web también funciona en Linux/macOS, sin impresión directa ni Excel COM.
-
-### Instalación
+## Instalación y ejecución
 
 ```powershell
-cd backend
-python -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-
-cd ..\frontend
-npm ci
+cd backend;  python -m venv .venv; .venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+cd ..\frontend; npm ci; npm run build
+cd ..; .\iniciar.cmd            # servidor + interfaz en http://127.0.0.1:8000
 ```
 
-### Ejecución
+La primera vez se abre el **asistente de configuración** (solo desde el propio equipo, con un código de un solo uso
+guardado en `<datos>\setup-code.txt`; en el escritorio se completa solo). No hay usuarios por defecto.
 
-Forma más simple: `iniciar.cmd` en la carpeta del proyecto. Usa siempre el entorno `backend\.venv` (y lo crea
-si no existe). Ejecutar `python -m pospy` con el Python global de Windows falla con
-`ModuleNotFoundError: No module named 'uvicorn'`, porque las dependencias están instaladas solo en `.venv`.
+Configuración (variables `POS_*`, red local con HTTPS, integraciones), desarrollo con recarga, pruebas y compilación
+del escritorio: [docs/developer/desarrollo.md](docs/developer/desarrollo.md).
 
-Desarrollo con recarga en caliente (dos terminales):
+## Pruebas
 
 ```powershell
-cd backend;  .venv\Scripts\python.exe -m pospy   # API en http://127.0.0.1:8000 (documentación: /api/docs)
-cd frontend; npm run dev                          # interfaz en http://localhost:5173 (reenvía /api al backend)
+cd backend;  .venv\Scripts\python.exe -m pytest; .venv\Scripts\python.exe -m ruff check pospy tests
+cd ..\frontend; npm run lint; npm test; npm run build; node e2e/smoke.mjs
 ```
 
-Producción web (un solo proceso sirve la API y la interfaz compilada):
-
-```powershell
-cd frontend; npm run build
-cd ..\backend; .venv\Scripts\python.exe -m pospy  # http://127.0.0.1:8000
-```
-
-`python -m pospy` acepta `--host`, `--port`, `--data-dir` y `--web-dist`, equivalentes a las variables de entorno.
-
-### Configuración inicial
-
-No hay usuarios por defecto ni registro público.
-
-1. Mientras la configuración inicial no termine, el backend guarda un código de un solo uso en
-   `<carpeta de datos>\setup-code.txt` (se borra al finalizar el asistente).
-2. Abra la aplicación **desde el mismo equipo** y escriba el código: se abre el asistente con un
-   perfil de administrador sin contraseña. La contraseña se asigna en el paso *Seguridad*.
-
-Las instalaciones anteriores conservan el inicio de sesión obligatorio al actualizar (migración 3).
-
-Herramientas de consola (desde `backend/`):
-
-```powershell
-.venv\Scripts\python.exe -m pospy.cli create-admin
-.venv\Scripts\python.exe -m pospy.cli reset-password <usuario>   # genera una contraseña temporal
-.venv\Scripts\python.exe -m pospy.cli status
-.venv\Scripts\python.exe -m pospy.cli backup
-```
-
-### Configuración
-
-Variables de entorno del backend:
-
-| Variable | Uso | Predeterminado |
-|---|---|---|
-| `POS_DATA_DIR` | Carpeta de datos (base, copias, plantillas, documentos, registros) | `backend/data` |
-| `POS_HOST` / `POS_PORT` | Dirección y puerto de escucha | `127.0.0.1` / `8000` |
-| `POS_WEB_DIST` | Carpeta de la interfaz compilada | `frontend/dist` |
-| `POS_SECURE_COOKIES` | `1` = cookie de sesión solo por HTTPS | `0` |
-| `POS_CORS_ORIGINS` | Orígenes permitidos, separados por comas, si la interfaz se sirve desde otro origen | vacío |
-| `POS_MASTER_KEY` | Clave para cifrar credenciales fuera de Windows (en Windows se usa DPAPI) | vacío |
-| `POS_SETUP_CODE` | Código de instalación inyectado (lo usa el escritorio) | vacío |
-| `POS_PUBLIC_URL` | Dirección pública HTTPS con la que se arman los enlaces de invitación (también se puede fijar en Gestión › Configuración › Grupos de trabajo) | vacío |
-
-La configuración del negocio (empresa, IVA, impresión, sesiones, copias, integraciones) se hace
-desde **Gestión** y se guarda en la base de datos. Los secretos se guardan cifrados y nunca se
-envían a la interfaz.
-
-**Red local**: por defecto solo escucha en el propio equipo. Para usarlo desde otros equipos,
-publíquelo detrás de un proxy inverso con HTTPS, con `POS_HOST=0.0.0.0` solo en una red de
-confianza y `POS_SECURE_COOKIES=1`. Use un único proceso y no ponga la base SQLite en una carpeta de red.
-
-**Grupos de trabajo por Internet**: los empleados deben poder abrir la aplicación desde fuera, así
-que el servidor tiene que estar publicado con HTTPS (proxy inverso, servidor en la nube o túnel con
-nombre). Defina `POS_PUBLIC_URL` con esa dirección. El tiempo real usa Server-Sent Events: el proxy
-no debe almacenar las respuestas `text/event-stream` (en nginx, `proxy_buffering off`). Los túneles
-rápidos de Cloudflare (`trycloudflare.com`) sí las almacenan; la interfaz lo detecta y recarga cada
-10 s. Detalles en `DOCUMENTACION_MODULO_GRUPOS_DE_TRABAJO.txt`.
-
-### Pruebas
-
-```powershell
-cd backend
-.venv\Scripts\python.exe -m pytest
-.venv\Scripts\ruff.exe check pospy tests
-
-cd ..\frontend
-npm run lint
-npm run typecheck
-npm test
-npm run build; npm run e2e   # navegador real contra el servidor real
-```
-
-`npm run e2e` arranca un servidor con datos temporales. Variables: `PYTHON` (intérprete con las
-dependencias del backend), `BROWSER` (`msedge` o `chrome`, predeterminado `msedge`), `SHOTS`
-(carpeta de capturas).
-
-Grupos de trabajo de extremo a extremo (servidor real, sesiones independientes, tiempo real):
-`backend\.venv\Scripts\python.exe scripts\groups_e2e.py [--public https://…]` y
-`node e2e/groups.mjs` (con `BASE` y `SETUP_BASE` para probar a través de un túnel).
-
-Notas y tareas con navegador real (administrador y dos empleados, y reinicio real del servidor):
-`npm run build; node e2e/notes-tasks.mjs`.
-
-Columnas del inventario (importando un CSV real) y tareas de un grupo con varios responsables
-(administrador y tres empleados en navegadores separados, y reinicio real del servidor):
-`npm run build; node e2e/columns-group-tasks.mjs`.
-
-### Compilar la aplicación de escritorio
-
-```powershell
-cd frontend; npm ci; npm run build
-cd ..; backend\.venv\Scripts\python.exe scripts\build_backend.py   # genera desktop\src-tauri\binaries\pospy-server-<triple>.exe
-cd desktop; npm ci; npm run build                                 # instaladores en desktop\src-tauri\target\release\bundle\
-```
-
-La ventana de Tauri arranca el backend empaquetado en un puerto libre de `127.0.0.1` y lo detiene
-al cerrarse; una segunda apertura enfoca la ventana existente.
-
-Nombre e identificador: `productName` e `identifier` en `desktop/src-tauri/tauri.conf.json`.
-Icono: reemplace `desktop/src-tauri/app-icon.png` (1024×1024) y ejecute `npm run icons` en `desktop/`,
-o `python scripts/make_icons.py "#color"` para regenerar los iconos de la PWA y del escritorio.
-
-### Arquitectura
-
-| Tema | Decisión |
-|---|---|
-| Reglas de negocio | Solo en el backend (`backend/pospy/services`); la interfaz no calcula totales ni decide permisos. |
-| Persistencia | SQLite en modo WAL, transacciones `BEGIN IMMEDIATE`, claves foráneas. |
-| Dinero | Enteros en centavos y cantidades en milésimas, con `Decimal` (HALF_UP). La API envía importes como texto (`"1234.50"`). |
-| Inventario | La existencia es la suma de movimientos; un trigger impide modificarla de otra forma. |
-| Contabilidad | Asiento de partida doble por cada operación; asientos inmutables con reversos enlazados. |
-| Idempotencia | Cabecera `Idempotency-Key` en ventas, devoluciones, cobros, pagos, movimientos y asientos. |
-| Sesión | Cookie `HttpOnly; SameSite=Strict`, token guardado como hash, protección CSRF por cabecera. |
-
-Detalle de las reglas contables y de autoridad sobre existencias: cabeceras de
-`backend/pospy/services/ledger.py` y `backend/pospy/services/sync.py`.
-
----
-
-## Integraciones de inventario
-
-*Gestión › Integraciones*. Por defecto POS-PY es la autoridad sobre las existencias y ninguna fuente
-las sobrescribe. Una conexión puede marcarse como **fuente maestra**: con la política «ajustar» las
-diferencias se registran como movimientos de conciliación; con «informar» solo se reportan. Toda
-sincronización manual pasa por vista previa, y aplicarla exige que el archivo no haya cambiado (SHA-256).
-
-**OneDrive (Microsoft Entra ID)**: registre una aplicación › Autenticación › plataforma
-«Aplicaciones móviles y de escritorio» con URI de redirección `http://localhost` › permisos delegados
-de Microsoft Graph `Files.Read` y `offline_access`. Copie el *Id. de aplicación (cliente)* en
-*Gestión › Integraciones › Credenciales*. No necesita secreto.
-
-**Google Drive (Google Cloud Console)**: habilite «Google Drive API», configure la pantalla de
-consentimiento OAuth (con usuarios de prueba mientras no esté verificada) y cree un ID de cliente
-OAuth de tipo «App de escritorio». Copie el Id. y el secreto en *Gestión › Integraciones*. El
-permiso `drive.readonly` es restringido: fuera de los usuarios de prueba, Google exige verificar la aplicación.
-
-**Carpeta de red**: rutas UNC; la cuenta de Windows que ejecuta POS-PY necesita permiso de lectura.
-
-## Plantillas de documentos
-
-*Gestión › Tipos de documento › (tipo) › Plantilla*. Use su propio Excel y escriba marcadores:
-
-- Encabezado: `{{numero}}`, `{{fecha}}`, `{{fecha_validez}}`, `{{cliente_nombre}}`, `{{cliente_identificacion}}`,
-  `{{subtotal}}`, `{{descuento}}`, `{{iva}}`, `{{total}}`, `{{vendedor}}`, `{{empresa_nombre}}`, `{{empresa_nit}}`,
-  y los campos adicionales del tipo como `{{extra.clave}}`. Pueden ir dentro de un texto: `Cotización N° {{numero}}`.
-- Primera fila de productos: `{{linea.n}}`, `{{linea.codigo}}`, `{{linea.descripcion}}`, `{{linea.cantidad}}`,
-  `{{linea.precio}}`, `{{linea.descuento}}`, `{{linea.iva_pct}}`, `{{linea.total}}`.
-
-«Descargar plantilla base» entrega un ejemplo con todos los marcadores disponibles. La plantilla
-original nunca se modifica; si deja de coincidir con el mapeo, la generación se detiene y lista los
-problemas. Las plantillas con imágenes, gráficos o formas requieren Microsoft Excel (COM), porque
-openpyxl no las conserva.
+El CI (GitHub Actions) ejecuta además Bandit, pip-audit, `npm audit` y gitleaks.
 
 ## Seguridad
 
-- Los permisos se validan en el backend en cada operación; la interfaz solo oculta lo no autorizado.
-- La instalación inicial exige el código de un solo uso y solo se acepta desde el propio equipo.
-- Con el inicio de sesión desactivado, el acceso directo solo funciona desde el propio equipo, los
-  empleados actúan con sus permisos y no pueden cambiar la configuración de seguridad (validado en
-  el backend). Un administrador **sin** contraseña sí queda accesible para cualquiera en ese equipo:
-  asígnele una. Es una protección local, no equivalente a una autenticación de servidor.
-- Contraseñas con hash scrypt (sal aleatoria por contraseña; nunca en texto plano ni en el navegador).
-  Detrás de un proxy inverso local todas las peticiones parecen locales: cree el administrador antes de publicar.
-- Auditoría inmutable que excluye contraseñas, tokens y secretos.
-- Las copias de seguridad contienen datos del negocio: guárdelas en un medio con acceso restringido.
-- Los permisos no protegen contra quien tenga acceso directo al archivo de la base: proteja la cuenta
-  de Windows y use cifrado de disco (BitLocker).
+Contraseñas con scrypt, sesiones con cookie `HttpOnly`/`SameSite=Strict`, protección CSRF, límites de intentos,
+autorización en el servidor por permiso, inventario y propiedad, **restricción opcional por equipo** (clave
+criptográfica del equipo aprobada por un administrador), auditoría inmutable y cabeceras de seguridad. Política y
+reporte de vulnerabilidades: [SECURITY.md](SECURITY.md). Detalle técnico y última auditoría interna:
+[docs/developer/seguridad.md](docs/developer/seguridad.md).
+
+## Documentación técnica
+
+[docs/developer/](docs/developer/README.md): arquitectura, desarrollo, seguridad, informe de auditoría, licencias de
+terceros y documentación por módulo.
+
+## Estado y limitaciones
+
+Proyecto en uso y desarrollo activo (ramas `Beta` → `Principal`).
+
+- **No emite facturación electrónica DIAN**: el comprobante de venta es un documento interno.
+- Contabilidad de gestión con un plan de cuentas de ejemplo (PUC); no sustituye la contabilidad oficial.
+- Sin lotes ni seriales. Vender y guardar requieren conexión con el servidor (sin conexión solo se consulta el catálogo).
+- Sin autenticación de dos factores. El instalador no está firmado y no hay actualización automática.
+- Las integraciones con OneDrive y Google Drive se probaron con respuestas simuladas, no con cuentas reales.
 
 ## Licencia
 
 © 2026 Café Con Alejo ([AlejandroDukesini](https://github.com/AlejandroDukesini)). Distribuido bajo
-[Creative Commons Atribución-NoComercial 4.0 Internacional (CC BY-NC 4.0)](https://creativecommons.org/licenses/by-nc/4.0/deed.es).
-Ver [`LICENSE`](LICENSE).
-
-- **Atribución**: toda copia, redistribución o adaptación debe dar crédito al autor, enlazar la
-  licencia e indicar si se hicieron cambios.
-- **No comercial**: no se permite su uso con fines comerciales.
-
-Para usos comerciales, contacte al autor.
+[Creative Commons Atribución-NoComercial 4.0 Internacional (CC BY-NC 4.0)](https://creativecommons.org/licenses/by-nc/4.0/deed.es);
+ver [`LICENSE`](LICENSE). Toda copia o adaptación debe dar crédito al autor, enlazar la licencia e indicar los cambios;
+no se permite el uso comercial (para usos comerciales, contacte al autor). Licencias de terceros:
+[docs/developer/licencias-terceros.md](docs/developer/licencias-terceros.md).

@@ -1,3 +1,5 @@
+> Documento técnico del módulo (estado vigente). La historia de cambios está en git; la visión general en [../README.md](../README.md).
+
 POS-PY — INVENTARIOS POR ADMINISTRADOR, ASOCIADOS A GRUPOS, CON SINCRONIZACIÓN REAL
 Documentación técnica y de pruebas · 19-11-2026
 ==========================================================================================
@@ -283,3 +285,52 @@ Pruebas:
   print-templates, smoke, groups, notes-tasks y columns-group-tasks pasan.
 ACCIÓN NECESARIA EN EL NEGOCIO: cierre el servidor en ejecución (las ventanas de python -m pospy) y
 vuelva a iniciarlo con iniciar.cmd. Al arrancar se aplica la migración 13.
+
+
+ANEXO — SINCRONIZACIÓN Y MOVIMIENTOS (vigente desde v011)
+==========================================================
+El modelo «inventario = grupo» de v011 fue reemplazado por la migración v013 (arriba). Lo siguiente sigue vigente.
+
+3. MECANISMO DE SINCRONIZACIÓN
+------------------------------------------------------------------------------------------
+- La base de datos del servidor es la única fuente de verdad.
+- Después de confirmar la transacción, el servidor publica por SSE el evento
+  {"type": "inventario", "inventory": <clave>, "change": venta | anulacion | devolucion |
+  producto | movimiento | importacion, ...}. Solo lo reciben quienes trabajan en ese inventario.
+- En la interfaz, useApi (lib/hooks.ts) vuelve a pedir al servidor los datos de inventario,
+  ventas, observaciones y documentos cuando llega ese evento para el inventario elegido.
+  Al reconectar se emite «resync» y todo se recarga.
+- El navegador solo recuerda la ÚLTIMA elección de inventario (localStorage, como preferencia).
+  El carrito en curso se guarda por inventario en sessionStorage, como antes.
+- Indicador en la barra superior: «Sincronizado», «Sincronizando…», «Sin conexión» y «Error de
+  sincronización».
+- Sin conexión, las operaciones fallan con un mensaje claro y nada se muestra como confirmado.
+  Reintentar una venta usa la misma clave de idempotencia y no la duplica.
+- Corrección hecha durante las pruebas: al volver la red, si el canal SSE anterior seguía
+  «abierto», el estado quedaba en «Sincronizando…» para siempre. Ahora se abre un canal nuevo y
+  se recarga todo (lib/realtime.ts, onOnline).
+
+5. MOVIMIENTOS, CANCELACIONES Y DEVOLUCIONES
+------------------------------------------------------------------------------------------
+Tipos de movimiento (nombres del proyecto) y su categoría en el panel:
+- Entradas: inicial, entrada (compra, reposición…), anulacion_venta, ajuste/conciliación positivos.
+- Salidas: venta, salida (merma, consumo interno…), ajuste/conciliación negativos.
+- Devoluciones: devolucion.
+Cada movimiento guarda producto, tipo, cantidad, existencia anterior y posterior, responsable,
+fecha, motivo y referencia (número de venta o devolución). Los movimientos no se editan ni se
+borran; los errores se corrigen con movimientos compensatorios.
+
+Cancelación (anulación) de una venta
+- Exige el permiso ventas.anular y acceso al inventario de la venta.
+- Pide motivo; guarda quién anuló y cuándo; conserva la venta, su vendedor y su salida original.
+- Agrega movimientos de entrada compensatorios por cada línea y el reverso contable, en una sola
+  transacción. Una segunda anulación se rechaza.
+- Es una cancelación COMERCIAL: no registra un reembolso de dinero. El dinero se devuelve con una
+  devolución (que lleva medio de reembolso) o en Finanzas. La interfaz lo dice al anular.
+
+Devoluciones con estado del producto
+- apto: vuelve al inventario (movimiento «devolucion»).
+- revision (pendiente de revisión): NO vuelve todavía. Se revisa en Inventario › Movimientos de
+  inventario › Devoluciones › «Revisar»: apto (vuelve, con su movimiento) o no apto.
+- no_apto: no vuelve; su costo pasa a pérdida de inventario (asiento «merma»).
+- La venta original se conserva y se enlaza desde cada devolución.

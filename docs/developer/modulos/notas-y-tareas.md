@@ -1,3 +1,5 @@
+> Documento técnico del módulo (estado vigente). La historia de cambios está en git; la visión general en [../README.md](../README.md).
+
 CAMBIOS — MÓDULO DE NOTAS Y TAREAS
 POS-PY · 17-11-2026
 ==========================================================================================
@@ -11,7 +13,7 @@ ACTUALIZACIÓN 18-11-2026 (tareas de grupos de trabajo). Lo siguiente reemplaza 
   e historial.
 - Una tarea asignada solo se elimina si nadie registró avance ni comentarios; si no, se cancela.
 - Las notas y las tareas personales no cambian.
-Detalle: DOCUMENTACION_COLUMNAS_INVENTARIO_Y_TAREAS_DE_GRUPO.txt.
+Detalle: columnas-inventario-y-tareas-de-grupo.md.
 
 1. PUNTO DE PARTIDA (inspección)
 ------------------------------------------------------------------------------------------
@@ -106,7 +108,7 @@ Creados:
   frontend/src/pages/tasks/NotesTab.tsx                    Pestaña «Mis notas»
   frontend/src/test/notes-tasks.test.tsx                   Pantallas de ambos roles
   frontend/e2e/notes-tasks.mjs                             Navegador real + reinicio del servidor
-  CAMBIOS_NOTAS_TAREAS.txt
+  notas-y-tareas.md
 Modificados:
   backend/pospy/services/tasks.py      Tareas personales, eliminar, tres estados, aviso en vivo
   backend/pospy/api/routes/admin.py    GET /api/tasks?scope=personales, DELETE /api/tasks/{id}

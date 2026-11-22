@@ -1,3 +1,5 @@
+> Documento técnico del módulo (estado vigente). La historia de cambios está en git; la visión general en [../README.md](../README.md).
+
 DOCUMENTACIÓN — MÓDULO DE GRUPOS DE TRABAJO (INVITACIÓN POR ENLACE Y CONEXIÓN POR INTERNET)
 POS-PY · 17-11-2026
 ==========================================================================================
@@ -141,7 +143,7 @@ Creados:
   frontend/src/pages/groups/GroupsPage.tsx, JoinPage.tsx, labels.tsx
   frontend/src/test/groups.test.tsx, realtime.test.ts
   frontend/e2e/groups.mjs, scripts/groups_e2e.py
-  DOCUMENTACION_MODULO_GRUPOS_DE_TRABAJO.txt
+  grupos-de-trabajo.md
 Modificados:
   backend/pospy/__main__.py (cierre rápido con canales abiertos), api/app.py (rutas),
   api/deps.py (detección de local/HTTPS detrás de proxy, IP real para límites),
@@ -240,4 +242,4 @@ distintos (por ejemplo, un teléfono Android con datos móviles).
 - El administrador dueño del grupo asigna tareas a uno o varios integrantes activos.
 - El administrador sigue el estado individual de cada responsable en vivo, por el mismo canal SSE.
 - Quien sale del grupo, o es retirado, deja de ver las tareas del grupo.
-- Detalle, permisos y pruebas: DOCUMENTACION_COLUMNAS_INVENTARIO_Y_TAREAS_DE_GRUPO.txt.
+- Detalle, permisos y pruebas: columnas-inventario-y-tareas-de-grupo.md.

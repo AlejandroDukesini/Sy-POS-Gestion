@@ -26,7 +26,8 @@ class Actor:
     def require(self, *permissions: str) -> None:
         missing = [p for p in permissions if p not in self.permissions]
         if missing:
-            raise PermissionDenied("No tiene permiso para esta operación.", {"permiso": ", ".join(missing)})
+            raise PermissionDenied("No tiene permiso para esta operación. Si la necesita para su trabajo, solicítela a un "
+                                   "administrador.", {"permiso": ", ".join(missing)})
 
 
 SYSTEM = Actor(id=None, username="sistema", role="admin",

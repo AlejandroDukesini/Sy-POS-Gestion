@@ -1,3 +1,5 @@
+> Documento técnico del módulo (estado vigente). La historia de cambios está en git; la visión general en [../README.md](../README.md).
+
 POS-PY — COLUMNAS PERSONALIZABLES DEL INVENTARIO Y TAREAS DE LOS GRUPOS DE TRABAJO
 Documentación técnica y de pruebas · 18-11-2026
 ==========================================================================================
@@ -118,7 +120,7 @@ Creados
   frontend/src/pages/tasks/TaskBoard.tsx      Tablero, tarjetas, diálogo de asignación y detalle
   frontend/src/test/inventory-columns.test.tsx
   frontend/e2e/columns-group-tasks.mjs        Navegador real, 4 sesiones, CSV real, reinicio
-  DOCUMENTACION_COLUMNAS_INVENTARIO_Y_TAREAS_DE_GRUPO.txt
+  columnas-inventario-y-tareas-de-grupo.md
 Modificados
   backend/pospy/services/inventory.py   Valores adicionales en listado, ficha, búsqueda, alta,
                                         edición y exportación
@@ -140,7 +142,7 @@ Modificados
   frontend/src/pages/groups/GroupsPage.tsx        Tareas en la página del grupo
   frontend/src/styles/components.css
   frontend/src/test/notes-tasks.test.tsx, frontend/e2e/notes-tasks.mjs
-  README.md, CAMBIOS_NOTAS_TAREAS.txt, DOCUMENTACION_MODULO_GRUPOS_DE_TRABAJO.txt
+  README.md, notas-y-tareas.md, grupos-de-trabajo.md
 
 Endpoints nuevos
   GET    /api/inventory/columns[?include_archived=true]

@@ -1,11 +1,12 @@
 import { LogIn } from 'lucide-react';
 import { useEffect, useState, type CSSProperties, type FormEvent } from 'react';
-import { ApiError, get } from '../api/client';
+import { ApiError, get, post } from '../api/client';
 import { Button } from '../components/ui/Button';
 import { Alert, ErrorAlert } from '../components/ui/Feedback';
 import { TextField } from '../components/ui/Form';
 import { useAuth } from '../context/Auth';
 import { DEFAULT_LOGIN, useOptionalTheme, type LoginLook } from '../context/Theme';
+import { deviceProof, deviceSupported, suggestedDeviceName } from '../lib/device';
 
 interface PublicCompany { name: string; has_logo: boolean }
 
@@ -60,6 +61,7 @@ export function LoginPage({ initialUsername = '', onBack, notice }: { initialUse
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
+  const [deviceCode, setDeviceCode] = useState('');
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -70,11 +72,17 @@ export function LoginPage({ initialUsername = '', onBack, notice }: { initialUse
     if (Object.keys(local).length) return;
     setBusy(true);
     setError(null);
+    setDeviceCode('');
     try {
       await login(username.trim(), password);
     } catch (err) {
-      setError(err as ApiError);
-      setPassword('');
+      const code = err instanceof ApiError ? String(err.fields?.device ?? '') : '';
+      if (code) {
+        setDeviceCode(code);        // equipo no autorizado: se conserva la contraseña para solicitar la autorización
+      } else {
+        setError(err as ApiError);
+        setPassword('');
+      }
     } finally {
       setBusy(false);
     }
@@ -91,6 +99,7 @@ export function LoginPage({ initialUsername = '', onBack, notice }: { initialUse
           {notice && <Alert kind="info">{notice}</Alert>}
           {expiredMessage && <Alert kind="info">{expiredMessage}</Alert>}
           <ErrorAlert error={error} title="No se pudo iniciar sesión" />
+          {deviceCode && <DeviceNotice code={deviceCode} username={username.trim()} password={password} />}
           <form className="stack" onSubmit={submit} noValidate>
             <TextField label="Usuario" value={username} onChange={setUsername} error={errors.username} autoComplete="username"
               autoCapitalize="none" spellCheck={false} required autoFocus={!initialUsername} />
@@ -104,5 +113,46 @@ export function LoginPage({ initialUsername = '', onBack, notice }: { initialUse
       </main>
       <LogoPanel />
     </div>
+  );
+}
+
+const DEVICE_TEXT: Record<string, string> = {
+  sin_prueba: 'Este navegador no pudo identificar el equipo. Abra el POS con su dirección segura (https) en un navegador actualizado.',
+  no_registrado: 'Este equipo no está autorizado para usar el POS. Puede solicitar la autorización: un administrador debe aprobarla.',
+  pendiente: 'La solicitud de este equipo está pendiente. Pida a un administrador que la apruebe en Gestión › Equipos autorizados.',
+  revocado: 'La autorización de este equipo fue revocada. Consulte con un administrador.',
+  rechazado: 'La solicitud de este equipo fue rechazada. Consulte con un administrador.',
+};
+
+/** El equipo no está autorizado: explica el motivo y permite SOLICITAR la autorización (nunca la concede sola). */
+function DeviceNotice({ code, username, password }: { code: string; username: string; password: string }) {
+  const [name, setName] = useState(suggestedDeviceName());
+  const [state, setState] = useState<'idle' | 'busy' | 'sent'>('idle');
+  const [error, setError] = useState<ApiError | null>(null);
+  const request = async () => {
+    setState('busy');
+    setError(null);
+    try {
+      await post('/devices/request', { username, password, name: name.trim() || suggestedDeviceName(), device: await deviceProof() });
+      setState('sent');
+    } catch (err) {
+      setError(err instanceof ApiError ? err : new ApiError(0, 'Equipo', (err as Error).message));
+      setState('idle');
+    }
+  };
+  return (
+    <Alert kind="warning" title="Equipo no autorizado">
+      <div className="stack" style={{ gap: 8 }}>
+        <span>{DEVICE_TEXT[code] ?? DEVICE_TEXT.no_registrado}</span>
+        {code === 'no_registrado' && state !== 'sent' && deviceSupported() && (
+          <>
+            <TextField label="Nombre de este equipo" value={name} onChange={setName} maxLength={60} hint="Por ejemplo: Caja 2, Bodega, Portátil de Ana." />
+            <Button busy={state === 'busy'} onClick={request}>Solicitar autorización de este equipo</Button>
+          </>
+        )}
+        {state === 'sent' && <strong>Solicitud enviada. Cuando un administrador la apruebe, podrá ingresar desde este equipo.</strong>}
+        <ErrorAlert error={error} title="No se pudo enviar la solicitud" />
+      </div>
+    </Alert>
   );
 }

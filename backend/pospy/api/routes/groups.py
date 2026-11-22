@@ -13,7 +13,7 @@ from starlette.concurrency import run_in_threadpool
 from ...context import AppContext
 from ...core.actor import Actor
 from ...core.errors import AuthError, DomainError
-from ..deps import actor, client_key, ctx, session_token
+from ..deps import actor, client_key, ctx, is_local, session_token
 from ..models import GroupIn, GroupUpdate, InvitationIn
 
 router = APIRouter(tags=["grupos de trabajo"])
@@ -104,6 +104,7 @@ def _sse(event: str, data: dict) -> str:
 async def realtime_stream(request: Request, current: Actor = Depends(actor), app: AppContext = Depends(ctx)):
     """Canal de eventos del servidor (text/event-stream). Requiere sesión; el navegador reconecta solo."""
     token = session_token(request)
+    local = is_local(request)
     loop = asyncio.get_running_loop()
     sub, first = app.realtime.subscribe(current.id, loop)
     if first:
@@ -127,7 +128,7 @@ async def realtime_stream(request: Request, current: Actor = Depends(actor), app
                 if time.monotonic() - last_check >= SESSION_CHECK_S:
                     last_check = time.monotonic()
                     try:
-                        await run_in_threadpool(app.auth.resolve, token, False)
+                        await run_in_threadpool(app.auth.resolve, token, False, local)
                     except (AuthError, DomainError):
                         yield _sse("sesion", {"reason": "terminada"})
                         return

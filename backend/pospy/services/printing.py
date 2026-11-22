@@ -43,6 +43,9 @@ class PrintingService:
         if not (actor.can("documentos.imprimir") or actor.can("ventas.historial")):
             actor.require("documentos.imprimir")
         where, params = [], []
+        if not actor.can("gestion.configuracion"):     # cada persona ve sus impresiones; la administración, todas
+            where.append("j.user_id = ?")
+            params.append(actor.id)
         if target_type:
             where.append("j.target_type = ?")
             params.append(target_type)

@@ -13,6 +13,7 @@ from .services.appearance import AppearanceService
 from .services.auth import AuthService
 from .services.backup import BackupService
 from .services.catalog import CatalogService
+from .services.devices import DeviceService
 from .services.documents import DocumentService
 from .services.finance import FinanceService
 from .services.financial_reports import FinancialReportService
@@ -47,7 +48,8 @@ class AppContext:
         self.secrets = SecretStore(self.db, config.data_dir, config.master_key)
         self.access = AccessService(self.db)
         self.appearance = AppearanceService(self.db, config.data_dir)
-        self.auth = AuthService(self.db, self.settings, config.data_dir, config.setup_code, self.access)
+        self.devices = DeviceService(self.db)
+        self.auth = AuthService(self.db, self.settings, config.data_dir, config.setup_code, self.access, self.devices)
         self.users = UserService(self.db)
         self.realtime = RealtimeHub()
         self.tasks = TaskService(self.db, self.realtime)

@@ -1,4 +1,8 @@
-"""Límite de intentos en memoria (ventana deslizante). Suficiente para un servidor de un solo proceso."""
+"""Límite de intentos en memoria (ventana deslizante). Suficiente para un servidor de un solo proceso.
+
+Se usa para enlaces de invitación y, por origen (dirección del cliente), para el inicio de sesión: complementa
+el bloqueo por cuenta (que frena adivinar la contraseña de UN usuario) frenando probar muchas cuentas o
+contraseñas desde un mismo origen. Se reinicia al reiniciar el servidor."""
 from __future__ import annotations
 
 import threading
@@ -14,9 +18,10 @@ class TooManyRequests(DomainError):
 
 
 class RateLimiter:
-    def __init__(self, limit: int, window_s: float):
+    def __init__(self, limit: int, window_s: float, message: str = "Demasiados intentos con enlaces no válidos."):
         self.limit = limit
         self.window_s = window_s
+        self.message = message
         self._hits: dict[str, deque[float]] = {}
         self._lock = threading.Lock()
 
@@ -34,8 +39,7 @@ class RateLimiter:
                 hits = self._recent(key, now)
                 if len(hits) >= self.limit:
                     wait = int(self.window_s - (now - hits[0])) + 1
-                    raise TooManyRequests(f"Demasiados intentos con enlaces no válidos. Espere {max(1, wait // 60)} minuto(s)"
-                                          " e intente de nuevo.")
+                    raise TooManyRequests(f"{self.message} Espere {max(1, wait // 60)} minuto(s) e intente de nuevo.")
 
     def hit(self, *keys: str) -> None:
         now = time.monotonic()
@@ -45,3 +49,8 @@ class RateLimiter:
             if len(self._hits) > 10_000:   # evita crecer sin límite con claves viejas
                 for k in [k for k, v in self._hits.items() if not v or now - v[-1] > self.window_s]:
                     del self._hits[k]
+
+    def reset(self, *keys: str) -> None:
+        with self._lock:
+            for key in keys:
+                self._hits.pop(key, None)

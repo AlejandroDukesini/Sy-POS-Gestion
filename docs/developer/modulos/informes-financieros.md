@@ -1,3 +1,5 @@
+> Documento técnico del módulo (estado vigente). La historia de cambios está en git; la visión general en [../README.md](../README.md).
+
 POS-PYTHON (POS-PY) — MÓDULO DE INFORMES FINANCIEROS (Finanzas › Informes de ingresos)
 =====================================================================================
 Fecha: 12/11/2026
@@ -318,7 +320,7 @@ ARCHIVOS CREADOS
   backend/tests/test_financial_reports.py
   frontend/src/pages/finance/IncomeReports.tsx
   frontend/src/test/fixtures/report-preview.json
-  DOCUMENTACION_MODULO_INFORMES_FINANCIEROS.txt
+  informes-financieros.md
 
 ARCHIVOS MODIFICADOS
 --------------------

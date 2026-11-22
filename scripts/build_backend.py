@@ -41,7 +41,9 @@ def main() -> int:
         "--distpath", str(OUT), "--workpath", str(work), "--specpath", str(work),
         "--add-data", f"{DIST}{sep}web",
         "--collect-submodules", "pospy", "--collect-submodules", "uvicorn", "--collect-data", "tzdata",
-        "--hidden-import", "win32print", "--hidden-import", "win32com.client", "--hidden-import", "pythoncom",
+        # Impresión directa (printing/gdi.py): win32print + win32ui/win32gui/win32con/pywintypes (importados en funciones).
+        "--hidden-import", "win32print", "--hidden-import", "win32ui", "--hidden-import", "win32gui",
+        "--hidden-import", "win32con", "--hidden-import", "pywintypes",
         "--noconsole",
         str(BACKEND / "pospy_server.py"),
     ]

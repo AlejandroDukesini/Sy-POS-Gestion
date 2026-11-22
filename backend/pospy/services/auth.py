@@ -25,9 +25,11 @@ from ..core.actor import Actor
 from ..core.audit import record
 from ..core.clock import iso, now_utc, parse_iso
 from ..core.errors import AuthError, ValidationError
+from ..core.ratelimit import RateLimiter
 from ..core.security import DUMMY_HASH, check_policy, hash_password, new_token, token_hash, verify_password
 from ..core.settings import Settings
 from .access import AccessService
+from .devices import DeviceError, DeviceService
 
 log = logging.getLogger("pospy.auth")
 
@@ -41,10 +43,14 @@ class LoginResult:
 
 class AuthService:
     def __init__(self, db, settings: Settings, data_dir: Path, injected_setup_code: str = "",
-                 access: AccessService | None = None):
+                 access: AccessService | None = None, devices: DeviceService | None = None):
         self.db = db
         self.settings = settings
         self.access = access or AccessService(db)
+        self.devices = devices or DeviceService(db)
+        # Límite por origen (además del bloqueo por cuenta): 20 fallos en 15 minutos desde la misma dirección.
+        self.limiter = RateLimiter(limit=20, window_s=15 * 60,
+                                   message="Demasiados intentos fallidos de inicio de sesión desde este equipo.")
         self.setup_file = Path(data_dir) / "setup-code.txt"
         self._injected = injected_setup_code
 
@@ -159,9 +165,22 @@ class AuthService:
         return LoginResult(token, actor, False)
 
     # ------------------------------------------------------------------ sesión
-    def login(self, username: str, password: str, client: str = "") -> LoginResult:
+    def login(self, username: str, password: str, client: str = "", origin: str = "", device_proof: dict | None = None,
+              local: bool = False) -> LoginResult:
         sec = self.settings.get("seguridad")
+        origin_key = f"login:{origin or '?'}"
+        self.limiter.check(origin_key)
         failure: AuthError | None = None
+        # La firma del equipo se comprueba antes (consume el desafío de un solo uso); el resultado se usa después de
+        # validar la contraseña, para no revelar el estado de los equipos a quien no conoce las credenciales.
+        proof_error: DeviceError | None = None
+        thumb = None
+        if device_proof is not None:
+            try:
+                _, thumb = self.devices.verify_proof(device_proof)
+            except DeviceError as exc:
+                proof_error = exc
+        device_id = None
         with self.db.tx() as conn:  # los fallos se registran y confirman antes de lanzar el error
             user = conn.execute("SELECT * FROM users WHERE username = ?", ((username or "").strip(),)).fetchone()
             now = now_utc()
@@ -189,25 +208,45 @@ class AuthService:
                 record(conn, None, "sesion.cuenta_inactiva", "user", user["id"])
                 failure = AuthError("La cuenta está desactivada. Consulte con un administrador.")
             else:
-                token, actor = self._open(conn, user, client, open_mode=False)
-                record(conn, actor, "sesion.inicio", "user", user["id"])
+                device = self.devices.by_thumbprint(conn, thumb) if thumb else None
+                if self.devices.enforced(conn) and not local:
+                    try:
+                        if proof_error:
+                            raise proof_error
+                        if thumb is None:
+                            self.devices.verify_proof(None)
+                        self.devices.require_authorized(device)
+                    except DeviceError as exc:
+                        record(conn, None, "sesion.equipo_rechazado", "user", user["id"],
+                               {"motivo": exc.code, "equipo": device["public_id"] if device else None, "cliente": (client or "")[:80]})
+                        failure = exc
+                if failure is None:
+                    if device and device["status"] == "autorizado":
+                        device_id = device["id"]
+                        self.devices.touch(conn, device_id, user["id"])
+                    token, actor = self._open(conn, user, client, open_mode=False, device_id=device_id)
+                    record(conn, actor, "sesion.inicio", "user", user["id"], {"equipo": device["public_id"]} if device_id else None)
         if failure:
+            if not isinstance(failure, DeviceError):
+                self.limiter.hit(origin_key)
             raise failure
+        self.limiter.reset(origin_key)
         return LoginResult(token, actor, bool(user["must_change_password"]))
 
-    def _open(self, conn: sqlite3.Connection, user, client: str, open_mode: bool) -> tuple[str, Actor]:
+    def _open(self, conn: sqlite3.Connection, user, client: str, open_mode: bool,
+              device_id: int | None = None) -> tuple[str, Actor]:
         sec = self.settings.get("seguridad", conn)
         now = now_utc()
         token = new_token()
         conn.execute("UPDATE users SET failed_attempts = 0, locked_until = NULL, last_login_at = ? WHERE id = ?",
                      (iso(now), user["id"]))
         conn.execute("INSERT INTO sessions(token_hash, user_id, session_version, created_at, last_seen_at,"
-                     " expires_at, client, open_mode) VALUES (?,?,?,?,?,?,?,?)",
+                     " expires_at, client, open_mode, device_id) VALUES (?,?,?,?,?,?,?,?,?)",
                      (token_hash(token), user["id"], user["session_version"], iso(now), iso(now),
-                      iso(now + timedelta(hours=sec["session_max_hours"])), (client or "")[:120], int(open_mode)))
+                      iso(now + timedelta(hours=sec["session_max_hours"])), (client or "")[:120], int(open_mode), device_id))
         return token, self._actor(conn, user)
 
-    def resolve(self, token: str | None, touch: bool = True) -> tuple[Actor, bool]:
+    def resolve(self, token: str | None, touch: bool = True, local: bool = False) -> tuple[Actor, bool]:
         """Devuelve (actor, debe_cambiar_contraseña) o lanza AuthError si la sesión no es válida.
 
         touch=False valida sin contar como actividad (lo usa el canal de tiempo real: una pestaña abierta
@@ -219,8 +258,10 @@ class AuthService:
         failure: AuthError | None = None
         with self.db.tx() as conn:
             row = conn.execute(
-                "SELECT s.id AS sid, s.session_version AS sv, s.last_seen_at, s.expires_at, s.revoked_at, s.open_mode, u.*"
-                " FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?", (token_hash(token),)).fetchone()
+                "SELECT s.id AS sid, s.session_version AS sv, s.last_seen_at, s.expires_at, s.revoked_at, s.open_mode,"
+                " s.device_id, d.status AS device_status, u.*"
+                " FROM sessions s JOIN users u ON u.id = s.user_id LEFT JOIN devices d ON d.id = s.device_id"
+                " WHERE s.token_hash = ?", (token_hash(token),)).fetchone()
             now = now_utc()
             if row is None or row["revoked_at"]:
                 failure = AuthError("La sesión terminó. Inicie sesión de nuevo.")
@@ -228,7 +269,17 @@ class AuthService:
                 expired = parse_iso(row["expires_at"]) <= now or parse_iso(row["last_seen_at"]) + idle <= now
                 # Una sesión de acceso directo deja de valer si se activa el inicio de sesión.
                 closed = bool(row["open_mode"]) and self._direct_closed(conn)
-                if expired or closed or not row["active"] or row["sv"] != row["session_version"]:
+                # Restricción por equipo: fuera del equipo servidor, la sesión debe venir de un equipo que SIGA autorizado.
+                device_denied = (not local and row["device_status"] != "autorizado" and not row["open_mode"]
+                                 and self.devices.enforced(conn))
+                if device_denied:
+                    conn.execute("UPDATE sessions SET revoked_at = ? WHERE id = ?", (iso(now), row["sid"]))
+                    record(conn, None, "sesion.equipo_rechazado", "user", row["id"],
+                           {"motivo": row["device_status"] or "sin_equipo", "sesion": row["sid"]})
+                    # 401 (no 403): la interfaz cierra la sesión y muestra el motivo en la pantalla de ingreso.
+                    failure = AuthError("Este equipo no está autorizado para usar el POS (o su autorización fue revocada). "
+                                        "Consulte con un administrador.")
+                elif expired or closed or not row["active"] or row["sv"] != row["session_version"]:
                     conn.execute("UPDATE sessions SET revoked_at = ? WHERE id = ?", (iso(now), row["sid"]))
                     failure = AuthError("La sesión expiró por seguridad. Inicie sesión de nuevo." if expired
                                         else "El inicio de sesión ahora es obligatorio. Ingrese con su usuario y contraseña."
@@ -237,11 +288,53 @@ class AuthService:
                 else:
                     if touch and (now - parse_iso(row["last_seen_at"])).total_seconds() > 30:
                         conn.execute("UPDATE sessions SET last_seen_at = ? WHERE id = ?", (iso(now), row["sid"]))
+                        if row["device_id"]:
+                            self.devices.touch(conn, row["device_id"], row["id"])
                     actor = self._actor(conn, row)
         if failure:
             raise failure
         # En acceso directo no se exige cambiar la contraseña temporal (no se usó para entrar).
         return actor, bool(row["must_change_password"]) and not row["open_mode"]
+
+    def device_status(self, token: str | None) -> dict:
+        """Equipo de la sesión actual (para la interfaz)."""
+        with self.db.read() as conn:
+            row = conn.execute("SELECT d.public_id, d.name, d.status FROM sessions s JOIN devices d ON d.id = s.device_id"
+                               " WHERE s.token_hash = ?", (token_hash(token or ""),)).fetchone()
+            return {"enforced": self.devices.enforced(conn), "device": dict(row) if row else None}
+
+    def register_device(self, actor: Actor, token: str | None, proof: dict, name: str, user_agent: str) -> dict:
+        """Con una sesión abierta: registra ESTE equipo. Un administrador lo autoriza de inmediato y la sesión queda
+        vinculada; un empleado queda «pendiente» (no puede autorizarse a sí mismo)."""
+        spki, thumb = self.devices.verify_proof(proof)
+        with self.db.tx() as conn:
+            user = conn.execute("SELECT * FROM users WHERE id = ?", (actor.id,)).fetchone()
+            device = self.devices.request(conn, user, spki, thumb, name, user_agent,
+                                          auto_authorize=actor if actor.can("gestion.configuracion") else None)
+            if device["status"] == "autorizado":
+                conn.execute("UPDATE sessions SET device_id = ? WHERE token_hash = ?", (device["id"], token_hash(token or "")))
+        return {"device": {k: device[k] for k in ("public_id", "name", "status")}}
+
+    def request_device(self, username: str, password: str, proof: dict, name: str, user_agent: str, origin: str) -> dict:
+        """Sin sesión (el equipo aún no está autorizado): solicita la autorización con las credenciales de la persona.
+        Queda «pendiente» hasta que un administrador la apruebe; nunca se autoriza sola."""
+        key = f"login:{origin or '?'}"
+        self.limiter.check(key)
+        spki, thumb = self.devices.verify_proof(proof)
+        failure: AuthError | None = None
+        with self.db.tx() as conn:
+            user = conn.execute("SELECT * FROM users WHERE username = ? AND active = 1", ((username or "").strip(),)).fetchone()
+            if user is None or not user["password_hash"] or not verify_password(password or "", user["password_hash"]):
+                if user is None:
+                    verify_password(password or "", DUMMY_HASH)
+                record(conn, None, "dispositivo.solicitud_fallida", "user", user["id"] if user else None)
+                failure = AuthError("Usuario o contraseña incorrectos.")
+            else:
+                device = self.devices.request(conn, user, spki, thumb, name, user_agent)
+        if failure:
+            self.limiter.hit(key)
+            raise failure
+        return {"device": {k: device[k] for k in ("public_id", "name", "status")}}
 
     def _direct_closed(self, conn: sqlite3.Connection) -> bool:
         """Sesiones directas válidas: durante el asistente o con el inicio de sesión desactivado."""
@@ -264,11 +357,14 @@ class AuthService:
         if not token:
             return
         with self.db.tx() as conn:
-            row = conn.execute("SELECT s.id, u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE token_hash = ?"
-                               " AND revoked_at IS NULL", (token_hash(token),)).fetchone()
+            # Columnas con alias propios: «s.id» y «u.id» se llamaban igual y el registro usaba el id de la SESIÓN como
+            # usuario; la clave foránea fallaba, se revertía la transacción y la sesión NO quedaba revocada.
+            row = conn.execute("SELECT s.id AS session_id, u.id AS user_id, u.username, u.role FROM sessions s"
+                               " JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.revoked_at IS NULL",
+                               (token_hash(token),)).fetchone()
             if row:
-                conn.execute("UPDATE sessions SET revoked_at = ? WHERE id = ?", (iso(), row[0]))
-                record(conn, Actor(row["id"], row["username"], row["role"]), "sesion.cierre", "user", row["id"])
+                conn.execute("UPDATE sessions SET revoked_at = ? WHERE id = ?", (iso(), row["session_id"]))
+                record(conn, Actor(row["user_id"], row["username"], row["role"]), "sesion.cierre", "user", row["user_id"])
 
     def change_password(self, actor: Actor, current: str, new: str, token: str) -> None:
         check_policy(new, actor.username)

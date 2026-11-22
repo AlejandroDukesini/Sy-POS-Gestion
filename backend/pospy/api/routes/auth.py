@@ -8,7 +8,7 @@ from ...core import permissions as perms
 from ...core.actor import Actor
 from ...core.errors import PermissionDenied
 from ...core.settings import PUBLIC_READ
-from ..deps import COOKIE, actor, actor_any, ctx, is_https, is_local, session_token
+from ..deps import COOKIE, actor, actor_any, client_key, ctx, is_https, is_local, session_token
 from ..models import ChangePassword, Login, OpenSession, Setup, SetupStart, SetupStep
 from ..serialize import out
 
@@ -90,7 +90,8 @@ def open_session(body: OpenSession, request: Request, response: Response, app: A
 
 @router.post("/auth/login")
 def login(body: Login, request: Request, response: Response, app: AppContext = Depends(ctx)):
-    result = app.auth.login(body.username, body.password, request.headers.get("user-agent", ""))
+    result = app.auth.login(body.username, body.password, request.headers.get("user-agent", ""), client_key(request),
+                            body.device.model_dump() if body.device else None, is_local(request))
     _set_session(app, response, result.token, request)
     return {"user": _me(app, result.actor), "must_change_password": result.must_change_password}
 

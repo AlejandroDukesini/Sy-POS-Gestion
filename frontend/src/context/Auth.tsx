@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ApiError, get, onUnauthorized, post } from '../api/client';
+import { deviceProof, deviceSupported, type DeviceProof } from '../lib/device';
 import { configureFormat } from '../lib/format';
 
 export interface User {
@@ -90,7 +91,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback(async (username: string, password: string) => {
-    await post('/auth/login', { username, password });
+    // Restricción por equipo (Gestión › Equipos autorizados): se demuestra la identidad del equipo con su clave.
+    let device: DeviceProof | undefined;
+    const policy = await get<{ enforced: boolean; local: boolean }>('/devices/policy').catch(() => ({ enforced: false, local: true }));
+    if (policy.enforced && !policy.local && deviceSupported()) device = await deviceProof();
+    await post('/auth/login', { username, password, ...(device ? { device } : {}) });
     setExpired('');
     await refresh();
   }, [refresh]);

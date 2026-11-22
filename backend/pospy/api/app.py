@@ -12,12 +12,14 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 from .. import __version__
 from ..context import AppContext
+from ..core.audit import record
 from ..core.errors import DomainError
-from .deps import CSRF_HEADER, CSRF_VALUE
+from .deps import CSRF_HEADER, CSRF_VALUE, is_local
 from .routes import (
     admin,
     appearance,
     auth,
+    devices,
     documents,
     finance,
     financial_reports,
@@ -58,6 +60,9 @@ def create_app(ctx: AppContext, run_scheduler: bool = False) -> FastAPI:
     @app.middleware("http")
     async def guard(request: Request, call_next):
         path = request.url.path
+        # La documentación interactiva de la API solo se sirve en el propio equipo servidor (no se expone a la red).
+        if path.startswith(("/api/docs", "/api/openapi.json")) and not is_local(request):
+            return JSONResponse({"error": "No encontrado", "detail": "Ruta de API inexistente.", "fields": {}}, status_code=404)
         if path.startswith("/api/") and request.method in UNSAFE and path != "/api/integrations/oauth/callback":
             if request.headers.get(CSRF_HEADER, "").lower() != CSRF_VALUE:
                 return JSONResponse({"error": "Solicitud rechazada", "detail": "Falta la cabecera de protección CSRF.",
@@ -66,6 +71,10 @@ def create_app(ctx: AppContext, run_scheduler: bool = False) -> FastAPI:
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
+        response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+        if request.url.scheme == "https" or request.headers.get("x-forwarded-proto", "").lower() == "https":
+            response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
         if not path.startswith("/api/docs"):
             response.headers.setdefault("Content-Security-Policy", CSP)
         if path.startswith("/api/"):
@@ -73,7 +82,9 @@ def create_app(ctx: AppContext, run_scheduler: bool = False) -> FastAPI:
         return response
 
     @app.exception_handler(DomainError)
-    async def domain_error(_request: Request, exc: DomainError):
+    async def domain_error(request: Request, exc: DomainError):
+        if exc.status == 403 and getattr(request.state, "actor", None) is not None:
+            _log_denied(ctx, request, exc)
         return JSONResponse({"error": exc.title, "detail": exc.detail, "fields": exc.fields}, status_code=exc.status)
 
     @app.exception_handler(RequestValidationError)
@@ -96,11 +107,21 @@ def create_app(ctx: AppContext, run_scheduler: bool = False) -> FastAPI:
         return {"status": "ok", "version": __version__, "schema": ctx.db.schema_version(), "desktop": ctx.config.desktop}
 
     # financial_reports va antes que finance: /finance/{kind} capturaría /finance/reports.
-    for module in (auth, appearance, inventories, inventory, observations, print_templates, sales, documents, financial_reports, finance, admin, suppliers, groups, notes):
+    for module in (auth, appearance, devices, inventories, inventory, observations, print_templates, sales, documents, financial_reports, finance, admin, suppliers, groups, notes):
         app.include_router(module.router, prefix="/api")
 
     _mount_frontend(app, ctx.config.web_dist)
     return app
+
+
+def _log_denied(ctx: AppContext, request: Request, exc: DomainError) -> None:
+    """Auditoría de intentos de acceso no autorizado (quién, qué ruta, qué permiso faltaba). Nunca falla la respuesta."""
+    try:
+        with ctx.db.tx() as conn:
+            record(conn, request.state.actor, "seguridad.acceso_denegado", "ruta", f"{request.method} {request.url.path}"[:120],
+                   {"motivo": exc.detail[:200], **{k: str(v)[:120] for k, v in (exc.fields or {}).items()}})
+    except Exception:  # noqa: BLE001 - registrar nunca debe cambiar la respuesta al usuario
+        log.warning("No se pudo registrar un acceso denegado", exc_info=True)
 
 
 def _spanish(err: dict) -> str:

@@ -1,3 +1,5 @@
+> Documento técnico del módulo (estado vigente). La historia de cambios está en git; la visión general en [../README.md](../README.md).
+
 ================================================================================
 POS-PY — MÓDULO DE OBSERVACIONES DE INVENTARIO
 Documentación técnica y de pruebas · 15/11/2026
@@ -102,7 +104,7 @@ frontend\src\pages\inventory\observations\labels.tsx
 frontend\src\pages\inventory\observations\ObservationForm.tsx
 frontend\src\pages\inventory\observations\ObservationsPage.tsx
 frontend\src\pages\inventory\observations\ObservationDetail.tsx
-DOCUMENTACION_MODULO_OBSERVACIONES_INVENTARIO.txt
+observaciones-inventario.md
 
 --------------------------------------------------------------------------------
 6. ARCHIVOS MODIFICADOS

@@ -88,8 +88,9 @@ def is_https(request: Request) -> bool:
 
 def actor_any(request: Request, app: AppContext = Depends(ctx)) -> Actor:
     """Actor autenticado, aunque deba cambiar su contraseña (solo para /auth y /me)."""
-    actor, must_change = app.auth.resolve(session_token(request))
+    actor, must_change = app.auth.resolve(session_token(request), local=is_local(request))
     request.state.must_change = must_change
+    request.state.actor = actor
     return actor
 
 
@@ -100,7 +101,9 @@ def actor(request: Request, current: Actor = Depends(actor_any), app: AppContext
         raise PermissionDenied("Debe cambiar su contraseña temporal antes de continuar.", {"password": "cambio_obligatorio"})
     key = (request.headers.get("x-inventory") or "").strip()[:20] or None
     with app.db.read() as conn:
-        return app.scopes.scope_actor(conn, current, key)
+        scoped = app.scopes.scope_actor(conn, current, key)
+    request.state.actor = scoped
+    return scoped
 
 
 def inventory_key(x_inventory: str | None = Header(default=None)) -> str | None:

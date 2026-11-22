@@ -1,3 +1,5 @@
+> Documento técnico del módulo (estado vigente). La historia de cambios está en git; la visión general en [../README.md](../README.md).
+
 DOCUMENTACIÓN — MÓDULO DE GESTIÓN DE PROVEEDORES (EXPEDIENTE POR PROVEEDOR)
 POS-PY · 12-11-2026
 ==========================================================================================
@@ -321,7 +323,7 @@ Creados
   frontend/src/pages/suppliers/SupplierDashboard.tsx  Expediente con 5 pestañas
   frontend/src/pages/suppliers/SupplierDialogs.tsx    Formularios: contacto, asesor, nota,
                                                       visita y cotización
-  DOCUMENTACION_MODULO_GESTION_PROVEEDORES.txt        Este documento
+  proveedores.md        Este documento
 Modificados
   backend/pospy/migrations/__init__.py                Registro de la migración 4
   backend/pospy/services/catalog.py                   Proveedores: WhatsApp, ciudad e

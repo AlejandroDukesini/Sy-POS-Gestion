@@ -41,8 +41,8 @@ MAX_UNCOMPRESSED = 60 * 1024 * 1024
 def _xml(data: bytes) -> ET.Element:
     """Analiza una parte del paquete. OOXML nunca usa DOCTYPE ni entidades: si aparecen, se rechaza el archivo
     (evita ataques de expansión de entidades y entidades externas)."""
-    head = data[:4096].upper()
-    if b"<!DOCTYPE" in head or b"<!ENTITY" in data.upper():
+    upper = data.upper()
+    if b"<!DOCTYPE" in upper or b"<!ENTITY" in upper:
         raise ExcelError("El archivo contiene XML no permitido (DOCTYPE o entidades).")
     return ET.fromstring(data)  # noqa: S314 - sin DOCTYPE no hay entidades que expandir
 

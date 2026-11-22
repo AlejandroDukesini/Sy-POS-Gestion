@@ -18,9 +18,37 @@ class Strict(BaseModel):
         return self.model_dump(exclude_unset=True)
 
 
+class DeviceProof(Strict):
+    """Prueba de posesión de la clave del equipo: clave pública (SPKI, base64) y firma ECDSA P-256 del desafío."""
+    public_key: str = Field(max_length=400)
+    nonce: str = Field(max_length=100)
+    signature: str = Field(max_length=200)
+
+
 class Login(Strict):
     username: str = Field(max_length=60)
     password: str = Field(max_length=200)
+    device: DeviceProof | None = None
+
+
+class DeviceRequest(Strict):
+    username: str | None = Field(default=None, max_length=60)
+    password: str | None = Field(default=None, max_length=200)
+    name: str = Field(max_length=60)
+    device: DeviceProof
+
+
+class DeviceDecision(Strict):
+    status: str = Field(max_length=20)
+    note: str = Field(default="", max_length=200)
+
+
+class DeviceRename(Strict):
+    name: str = Field(max_length=60)
+
+
+class DeviceEnforcement(Strict):
+    enforced: bool
 
 
 class Setup(Strict):
