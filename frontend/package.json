@@ -14,7 +14,7 @@
     "e2e": "node e2e/smoke.mjs"
   },
   "dependencies": {
-    "lucide-react": "0.460.0",
+    "lucide-react": "1.75.0",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "react-router-dom": "7.18.4"
