@@ -106,6 +106,20 @@ cd ..; backend\.venv\Scripts\python.exe scripts\build_backend.py   # desktop\src
 cd desktop; npm ci; npm run build                                 # instaladores en desktop\src-tauri\target\release\bundle\
 ```
 
+### Publicar una versión (release)
+
+1. Suba la versión en `backend/pospy/__init__.py`, `desktop/package.json`, `desktop/src-tauri/tauri.conf.json` y
+   `desktop/src-tauri/Cargo.toml` (deben coincidir).
+2. Compile como arriba y pruebe el instalador en un equipo sin instalación previa: instalación silenciosa
+   (`POS-PY_<v>_x64-setup.exe /S`), apertura (asistente sin código), cierre (el servidor interno se detiene) y
+   desinstalación (`%LOCALAPPDATA%\POS-PY\uninstall.exe /S`; los datos de `%APPDATA%\com.pospy.app` se conservan).
+3. Genere las sumas: `sha256sum POS-PY_<v>_x64-setup.exe POS-PY_<v>_x64_es-ES.msi > SHA256SUMS.txt`.
+4. Cree el release desde `Principal` con `gh release create v<v> --target Principal --title "POS-PY <v>"
+   --notes-file notas.md POS-PY_<v>_x64-setup.exe POS-PY_<v>_x64_es-ES.msi SHA256SUMS.txt`.
+
+Los instaladores no están firmados (Authenticode): Windows SmartScreen mostrará una advertencia hasta firmarlos con un
+certificado de firma de código.
+
 La ventana arranca el backend empaquetado en un puerto libre de `127.0.0.1` y lo detiene al cerrarse. Icono:
 `desktop/src-tauri/app-icon.png` y `npm run icons` en `desktop/`, o `scripts/make_icons.py "#color"`.
 Licencias de terceros: `scripts/third_party_licenses.py` → `docs/developer/licencias-terceros.md`.

@@ -36,9 +36,39 @@ Arquitectura resumida: la interfaz llama a la API (`/api`), el servidor valida i
 inventario en cada operación y guarda en SQLite (WAL, transacciones, auditoría inmutable). Detalle en
 [docs/developer/arquitectura.md](docs/developer/arquitectura.md).
 
+## Descargar e instalar en Windows
+
+1. Abra la página de la última versión:
+   **[Releases › Latest](https://github.com/AlejandroDukesini/Sy-POS-Gestion/releases/latest)**.
+2. En **Assets** descargue uno de los instaladores (64 bits):
+
+   | Archivo | Para quién |
+   |---|---|
+   | `POS-PY_<versión>_x64-setup.exe` | **Recomendado.** Instalación solo para su usuario, **sin permisos de administrador**. |
+   | `POS-PY_<versión>_x64_es-ES.msi` | Instalación para todos los usuarios del equipo o despliegue corporativo (GPO/Intune); pide permisos de administrador. |
+
+3. (Recomendado) Compruebe que el archivo no fue alterado: en PowerShell ejecute
+   `Get-FileHash .\POS-PY_<versión>_x64-setup.exe -Algorithm SHA256` y compare el resultado con el archivo
+   `SHA256SUMS.txt` del mismo release.
+4. Ejecute el instalador. Como todavía no está firmado digitalmente, Windows SmartScreen puede mostrar «Windows
+   protegió su PC»: pulse **Más información › Ejecutar de todas formas** (solo si lo descargó de la página oficial de
+   releases y la suma SHA-256 coincide). Si falta Microsoft Edge WebView2, el instalador lo descarga solo. No hace
+   falta instalar Python ni otros programas.
+5. Abra **POS-PY** desde el menú Inicio: aparece el **asistente de configuración inicial** (empresa, preferencias,
+   seguridad, empleados), sin pedir código ni cuenta. Si lo cierra a mitad, continúa en el último paso.
+
+- **Requisitos**: Windows 10 u 11 de 64 bits. Para imprimir, el controlador de la impresora instalado en Windows.
+- **Datos**: `%APPDATA%\com.pospy.app\data` (base de datos, plantillas, imágenes y copias). Desinstalar **no** los borra.
+- **Actualizar**: cree una copia en *Gestión › Copias de seguridad*, descargue la versión nueva e instálela encima de la
+  anterior; los datos se conservan y se actualizan al abrir.
+- **Desinstalar**: *Configuración de Windows › Aplicaciones › POS-PY › Desinstalar*.
+- **Otros equipos de la red**: la aplicación de escritorio usa el servidor del propio equipo. Para que otros equipos
+  usen el mismo POS, publique el servidor con HTTPS (ver [docs/developer/desarrollo.md](docs/developer/desarrollo.md))
+  y, si lo desea, limite el acceso en *Gestión › Equipos autorizados*.
+
 ## Requisitos
 
-- Usuarios: Windows 10/11 (el instalador incluye todo; WebView2 se descarga si falta).
+- Usuarios: Windows 10/11 de 64 bits (ver «Descargar e instalar en Windows»).
 - Desarrollo: Python 3.12+ y Node.js 20+ (Rust y MSVC solo para compilar el escritorio).
 
 ## Instalación y ejecución
