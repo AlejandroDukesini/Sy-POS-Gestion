@@ -1,6 +1,6 @@
 -r requirements.txt
 pytest==9.1.1
-ruff==0.17.1
+ruff==0.17.5
 pyinstaller==6.22.3
 # Seguridad (CI y auditorías locales): análisis estático y vulnerabilidades conocidas de dependencias.
 bandit==1.9.4
